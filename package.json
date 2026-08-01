@@ -1,0 +1,25 @@
+{
+  "name": "artalife",
+  "version": "0.1.0",
+  "description": "Arta — the rig, the physics and the films. Generation only; integration lives downstream.",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "scene": "python3 scenes/undefined/generate.py && python3 scenes/undefined/notebook.py",
+    "verify": "python3 scenes/undefined/generate.py >/dev/null && cmp scenes/undefined/scene.svg dist/scenes/undefined.svg && echo 'dist/scenes/undefined.svg reproduces byte-for-byte'",
+    "typecheck": "tsc -b",
+    "audit": "node tools/arta-audit.mjs",
+    "check": "npm run typecheck && npm run verify"
+  },
+  "files": [
+    "src",
+    "dist",
+    "ARTA.md"
+  ],
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "typescript": "~5.6.0"
+  }
+}

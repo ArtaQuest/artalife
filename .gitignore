@@ -1,0 +1,9 @@
+node_modules/
+__pycache__/
+*.pyc
+frames/
+png/
+.DS_Store
+scenes/*/scene.svg
+scenes/*/*.ipynb
+tsconfig.tsbuildinfo
