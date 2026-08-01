@@ -275,8 +275,18 @@ in five groups — cost, calm, head, speed, reduced; current baseline, all passi
 | Head oscillation at rest | 0.4 Hz — the breath, and nothing else |
 | Head reversals: still / sweeping / realistic hand | 0.5 / 0.8 / 0.5 per second |
 | Peak per-frame movement | 12.4 px sampled, `data-overspeed` never raised |
-| Reduced motion | 0 frames, 5/5 limbs drawn, arrow at 0.8 |
+| Reduced motion | 0 frames, 5/5 limbs drawn, arrow at 0.8, on stage |
 | Probes saw motion | asserted separately, so a dead probe cannot read as calm |
+
+**A skip is not a pass, and the tally must say so.** The run prints
+`14/14 asserted checks passed, 1 skipped (…)`, naming what went unmeasured. It
+used to print `15/15` for a run in which two checks measured nothing. A check
+with nothing to measure gets three outcomes, not two: genuinely inapplicable
+(the fixed companion layer cannot leave the viewport, so `stops off screen` is
+N/A and `stops when tab hidden` carries that law), no control on this page
+(SKIP, with the page that does have one named), or **a probe that should have
+worked and did not — which is a FAIL**, because a broken probe reporting PASS is
+the whole failure mode this suite exists to catch.
 
 Run it against **production** too, not just the dev server — the clamp
 convergence bug above passed every local run and failed on the first prod run.

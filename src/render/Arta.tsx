@@ -181,9 +181,20 @@ export default function Arta({
       const dx = to.x - from.x, dy = to.y - from.y;
       const len = Math.hypot(dx, dy) || 1;
       const ux = dx / len, uy = dy / len;
-      const shaft = Math.min(58, len * 0.4);
+      // Fly only as far as the stage. A target below the fold has a world y well
+      // outside the viewBox — measured at y 2024 in an 813-tall stage — so the
+      // arrow was drawn correctly and entirely off-canvas: the act reported
+      // `point`, the opacity read 0.8, and the viewer saw nothing at all. The
+      // gesture communicates a DIRECTION, and clamping the flight to the edge
+      // leaves the direction untouched. Infinity is the honest answer for a ray
+      // parallel to an edge pair, and `len` bounds it in any case.
+      const exit = (o: number, d: number, lo: number, hi: number) =>
+        d > 1e-6 ? (hi - o) / d : d < -1e-6 ? (lo - o) / d : Infinity;
+      const M = 14;                                              // stage inset
+      const reach = Math.max(46, Math.min(len, exit(from.x, ux, M, vw - M), exit(from.y, uy, M, wh - M)));
+      const shaft = Math.min(58, reach * 0.4);
       const u = Math.min(1, age / 0.5);
-      const t0 = 22 + (len - shaft - 22) * (u * (2 - u));       // ease-out flight
+      const t0 = 22 + Math.max(0, reach - shaft - 22) * (u * (2 - u));   // ease-out flight
       const ax = from.x + ux * t0, ay = from.y + uy * t0;
       const bx = ax + ux * shaft, by = ay + uy * shaft;
       const px = -uy, py = ux;                                   // barb direction
