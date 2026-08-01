@@ -264,8 +264,8 @@ Nothing here is believed without measurement. Run:
 node tools/arta-audit.mjs [url]   # AQ_CDP=… against any Chrome with a debug port
 ```
 
-It exits with the number of failed checks, so CI can gate on it. Thirteen checks
-across five groups; current baseline, all passing:
+It exits with the number of failed checks, so CI can gate on it. Fifteen checks
+in five groups — cost, calm, head, speed, reduced; current baseline, all passing:
 
 | Check | Measured |
 |---|---|
@@ -276,6 +276,7 @@ across five groups; current baseline, all passing:
 | Head reversals: still / sweeping / realistic hand | 0.5 / 0.8 / 0.5 per second |
 | Peak per-frame movement | 12.4 px sampled, `data-overspeed` never raised |
 | Reduced motion | 0 frames, 5/5 limbs drawn, arrow at 0.8 |
+| Probes saw motion | asserted separately, so a dead probe cannot read as calm |
 
 Run it against **production** too, not just the dev server — the clamp
 convergence bug above passed every local run and failed on the first prod run.
@@ -287,12 +288,24 @@ fraction of the per-frame budget. Measure reversals, and measure them under a
 on purpose. Following a deliberate 2.6 Hz input is correct behaviour; the audit
 reports that case without asserting on it.
 
-**A failing test is sometimes the test's fault.** Four false failures in this
-build: `svg path` matched the deliberately-empty arrow; the off-screen test
-scrolled the window while the SPA scrolls an inner container; a per-frame delta
-was sampled twice inside one discrete step; and a rect was read before a
-smooth-scroll had finished. Check the probe before believing the failure — but
-check it *quickly*, because three real bugs hid behind exactly that excuse.
+**A failing test is sometimes the test's fault.** Six false failures in this
+build: `svg path` matched the deliberately-empty arrow, and later the rope; the
+off-screen test scrolled the window while the SPA scrolls an inner container; a
+per-frame delta was sampled twice inside one discrete step; a rect was read
+before a smooth-scroll had finished; reusing a URL made the navigation
+fragment-only, so nothing remounted; and a guard matched "409 processed", which
+was a file counter, not an HTTP status. Check the probe before believing the
+failure — but check it *quickly*, because real bugs hide behind that excuse.
+
+**The far worse failure is a green run built from nothing.** One 13/13 was
+entirely zeros: a reused tab leaked scroll position and media emulation into
+the next phase, and navigating to an identical URL never reloaded, so the whole
+run measured a reduced-motion Arta that was scrolled out of view and reported
+perfect health. Every probe that *can* measure nothing now has a companion check
+asserting it saw something — `head · probe actually saw motion`,
+`speed · probe actually saw motion` — and a check with no control to drive says
+**SKIPPED** rather than passing vacuously. A pass whose evidence is zero is not
+a pass; it is an untested claim wearing one.
 
 Two thresholds in the audit are deliberately looser than the law they guard, and
 both say why in the source: the sampled peak-px bound (a separate rAF can see
@@ -301,35 +314,42 @@ tilt drift are three independent oscillations that legitimately sum to ~2/s).
 
 ---
 
-## 12b. Planned — rope travel, and Arta everywhere
+## 12b. Rope travel, and Arta everywhere
 
-Operator direction 2026-07-31, **designed but NOT yet built**. Recorded here so
-the reasoning survives.
+Arta is a single page-level companion, not three per-page stages: one fixed
+layer, present everywhere, following the reader.
 
-Arta becomes a single page-level companion rather than three per-page stages: one
-fixed layer, present on every route. The app-shell question this raises against
-the Kaggle-carbon-copy directive is settled in Arta's favour by that same
-direction.
-
-**Rope is the travel tool, and it unifies with the signature.** Sagittarius fires
-an arrow; the arrow carries the line. So the grapple is not a second mechanic
-bolted on, it is the gesture Arta already has, doing work. The rope is blue — it
-is a tool (§8), so this follows from the existing rule rather than needing a new
-one.
+**Rope is the travel tool, and it unifies with the signature.** Sagittarius
+fires an arrow; the arrow carries the line. The grapple is not a second mechanic
+bolted on, it is the gesture Arta already has, doing work. The rope is blue
+because it is a tool (§8) — the existing rule, not a new one.
 
 **Rope solves what walking cannot.** Scrolling is vertical and a walker only
 travels horizontally, so a walk-only companion can never actually follow the
 reader. A line thrown to an anchor gives Arta the vertical axis.
 
-**Travel is planned, not lerped.** Arta picks a goal (the landmark the reader is
-currently on), chooses walk for a short horizontal hop or rope for anything far
-or vertical, and then takes the time it takes. It must never teleport, and it
-must never keep up perfectly — arriving late is the character. If the reader
-jumps a long way, Arta is legitimately left behind and has to make its way there.
+**Travel is planned, not lerped.** `Brain.travelTo` picks a goal, then chooses:
+short and level → walk; far or vertical → rope. The rope run is
+`throw → fly → land`, and the swing is a **pendulum, not a zip-line between two
+pins** — a straight interpolation to the anchor is the tell that there is no
+rope, only a tween. Arta takes the time it takes, must never teleport, and must
+never keep up perfectly: arriving late is the character. A reader who jumps a
+long way legitimately leaves Arta behind to make its own way there.
 
-Constraints it must still satisfy: the §3 speed ceiling applies to a swing exactly
-as to a step, the three laws still hold, and a fixed layer must clear the mobile
-bottom navigation.
+**Arta stands on something.** Gravity is real: `Floor` ledges are read from the
+page, `floorUnder` finds the surface beneath the feet and `fall` runs until it
+is reached. Hovering is not a state the rig can be in — if Arta is not on a
+ledge it is falling to one, or it is on the rope.
+
+Two things this must not break. The §3 speed ceiling applies to a swing exactly
+as it does to a step. And **reduced motion cannot travel** — no loop runs, so a
+rope trip would strand Arta hanging forever; that path relocates instead
+(`Brain.placeAt`).
+
+**Open:** when every ledge on screen is *above* Arta, it stays on the stage
+floor — `floorUnder` only looks downward, and relocation only moves sideways.
+Climbing to a ledge overhead needs the rope wired into idle, not only into a
+commanded trip.
 
 ---
 
@@ -355,6 +375,14 @@ Every one of these was actually done here, found by looking, and fixed.
   it did, at 12.6 px against a 12 px limit, on **production**, where the frame
   timing differs from the dev machine's. Iterate to convergence. A limit that is
   only approximately enforced is a limit that is merely described.
+- **One landing for two ways of arriving.** `land` blended out of `hang(0)`
+  because a rope trip ends hanging — but a figure that simply walked off a ledge
+  also lands, and it snapped into a hang for one frame on the way down. The same
+  act also steered x toward `this.goal`, which after a plain fall is whatever an
+  earlier trip left behind, yanking Arta sideways on touchdown. An act that two
+  different histories can enter must be written for the state it is *in*, not
+  for the one it usually came from. Landing means absorb, here — nothing else.
+
 - **Comparing an intent against its own easing value.** The turn trigger tested
   the desired side against `pose.face`, a float mid-ease that is essentially
   never exactly ±1, while the base pose carried the library default of `face: 1`
