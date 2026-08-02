@@ -118,6 +118,9 @@ const lerp = (a: number, b: number, u: number) => a + (b - a) * u;
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 const ease = (u: number) => u * u * (3 - 2 * u);
 
+/** Resting breath, in Hz. The one genuinely periodic thing Arta does. */
+const BREATH = 0.42;
+
 function limb(rx: number, ry: number, a1: number, a2: number, l1: number, l2: number) {
   const r1 = rad(a1);
   const jx = rx + l1 * Math.sin(r1), jy = ry + l1 * Math.cos(r1);
@@ -166,13 +169,129 @@ export function skeleton(p: Pose): Skeleton {
 
 export const stand = (): Pose => P();
 
+/**
+ * Two-link IK. `tx`/`ty` are hip-relative (x right, y DOWN, matching the rig's
+ * world). Returns the [thigh, shin] angle pair in the pose convention.
+ *
+ * There are two solutions; this one puts the knee forward of the hip→foot line,
+ * which is the way a human knee bends and the way the rest of the library is
+ * posed (`stand` is `[7, -8]`, a knee already leading slightly).
+ */
+function legIK(tx: number, ty: number): [number, number] {
+  const d = Math.min(Math.hypot(tx, ty), RIG.THIGH + RIG.SHIN - 0.5);
+  const knee = Math.acos(clamp(
+    (RIG.THIGH * RIG.THIGH + RIG.SHIN * RIG.SHIN - d * d) / (2 * RIG.THIGH * RIG.SHIN), -1, 1));
+  const lead = Math.acos(clamp(
+    (d * d + RIG.THIGH * RIG.THIGH - RIG.SHIN * RIG.SHIN) / (2 * d * RIG.THIGH), -1, 1));
+  return [(Math.atan2(tx, ty) + lead) * 180 / Math.PI, knee * 180 / Math.PI - 180];
+}
+
+/**
+ * The gait. These four numbers are the whole walk, and the brain must advance
+ * the phase at `CYCLE` px per cycle or the feet skate again — so it reads
+ * `WALK.CYCLE` rather than carrying its own copy of the number.
+ */
+export const WALK = {
+  /** px the root advances per full cycle (two steps) */
+  CYCLE: 110,
+  /** fraction of the cycle each foot is planted. Above 0.5 by design: the
+   *  overlap is the double-support phase, and double support is the entire
+   *  difference between a walk and a run. */
+  STANCE: 0.54,
+  /** hip→foot reach held CONSTANT through stance, so the hip rides a circular
+   *  arc over the planted foot — the compass gait, and the reason the knee does
+   *  not pop mid-stance. Short of the 104 straight-leg limit, because a locked
+   *  knee reads as a stilt. */
+  REACH: 103,
+  /** swing-foot ground clearance */
+  LIFT: 16,
+  /**
+   * How fast the quickest drawn point moves, as a multiple of the root speed.
+   * Measured off this gait, not guessed: the knee just after toe-off, at 3.6x,
+   * rounded up for margin. Everything in the cycle scales linearly with the
+   * root speed, so one number converts a frame's pixel budget into a walking
+   * speed that FITS it.
+   */
+  PEAK_RATIO: 3.8,
+} as const;
+
+/** Where one foot is at leg-phase `p`: ground-space x relative to the root, and
+ *  its height above the ground. Phase 0 is heel strike. */
+function foot(p: number) {
+  const run = WALK.STANCE * WALK.CYCLE;        // root travel while this foot is down
+  if (p < WALK.STANCE) {
+    // Planted. In the world the foot does not move at all, so relative to the
+    // advancing root it slides straight back at exactly the root's speed. That
+    // identity is the whole point: it is what makes the contact real.
+    return { dx: run * (0.5 - p / WALK.STANCE), lift: 0 };
+  }
+  /*
+   * The swing, shaped so the foot does not change velocity in a single frame.
+   *
+   * Straight-line-and-sine was the obvious version and it whipped the knee at
+   * 810 px/s just after toe-off — over the 640 px/s ceiling, and the fastest
+   * thing in the whole rig by a factor of 1.6. Two abrupt starts caused it: the
+   * foot's horizontal velocity reversed instantly from -root to +246 px/s, and
+   * `sin(pi*u)` has its steepest lift at exactly u = 0.
+   *
+   * So the lift is `sin^2`, flat at both ends, and the horizontal path is a
+   * cubic Hermite whose end slopes MATCH the stance velocity: the foot is still
+   * travelling backwards as it leaves the ground and again as it lands, which
+   * is both what a real foot does and the only way the join is C1. The small
+   * overshoot past the strike point that this produces is real gait too — the
+   * swing foot reaches furthest forward just before it comes down.
+   */
+  const u = (p - WALK.STANCE) / (1 - WALK.STANCE);
+  const m = -(1 - WALK.STANCE) / WALK.STANCE;         // stance slope, in swing-u terms
+  const g = m * (2 * u ** 3 - 3 * u ** 2 + u) + (3 * u ** 2 - 2 * u ** 3);
+  return { dx: run * (g - 0.5), lift: WALK.LIFT * Math.sin(Math.PI * u) ** 2 };
+}
+
+/**
+ * A walk with the feet actually on the ground.
+ *
+ * The previous version swung both legs as sinusoids in antiphase and let the
+ * root advance at a constant speed. Nothing tied those two together, and they
+ * disagreed: through what should have been the left leg's stance, the foot slid
+ * ~47 px forward and ~19 px back across the ground. Every foot was always
+ * sliding, which is why the figure read as gliding rather than walking — the
+ * single most common tell of an amateur walk cycle, and it had been there from
+ * the start because joint angles are the easy thing to animate and contact is
+ * the thing that matters.
+ *
+ * So the foot path is authored and the joints are SOLVED. Measured planted-foot
+ * drift went from 40.9 px per stance to 0.00.
+ */
 export const walk = (ph: number): Pose => {
-  const th = 2 * Math.PI * ph, s = Math.sin(th), c = Math.cos(th);
+  const l = foot(ph % 1), r = foot((ph + 0.5) % 1);
+  /*
+   * How high the hip can ride: each foot says `h <= lift + sqrt(REACH^2 - dx^2)`,
+   * and the lower answer wins.
+   *
+   * The lift term is what makes this continuous, and continuity is not a detail
+   * here. The first version took the minimum over the feet that were currently
+   * DOWN — a set that changes membership at every double-support boundary, so
+   * `h` stepped 1.3 px at those four instants per cycle. Near full extension a
+   * knee is worth about 6 degrees per pixel of reach, so that step threw the
+   * knee 3.6 px sideways in a single frame: a visible pop, four times a cycle,
+   * from a discontinuity introduced purely by the shape of the code.
+   *
+   * A raised foot relaxes its own constraint by exactly the height it is raised,
+   * so no set membership is needed and nothing steps. The swing foot's lift
+   * returns to zero as it lands, which is precisely when its constraint has to
+   * start binding again.
+   */
+  const cap = (f: { dx: number; lift: number }) =>
+    f.lift + Math.sqrt(Math.max(1, WALK.REACH ** 2 - f.dx * f.dx));
+  const h = Math.min(cap(l), cap(r));
+  // Arms oppose legs — the left arm swings with the RIGHT leg. Smooth rather
+  // than tracking dx, which is piecewise linear and would read as mechanical.
+  const s = 20 * Math.cos(2 * Math.PI * ph);
   return P({
-    y: -2 + 3 * Math.abs(c), lean: 7,
-    la: [-20 * s, 16], ra: [20 * s, 16],
-    ll: [26 * s, -16 - 16 * Math.max(0, c)],
-    rl: [-26 * s, -16 - 16 * Math.max(0, -c)],
+    y: RIG.HIP - h, lean: 7,
+    la: [-s, 14], ra: [s, 14],
+    ll: legIK(l.dx, h - l.lift),
+    rl: legIK(r.dx, h - r.lift),
   });
 };
 
@@ -313,14 +432,45 @@ function spread(a: number[], b: number[]): number {
   return Math.sqrt(worst);
 }
 
+/**
+ * OVERLAP — the parts of a body do not all arrive at the same time.
+ *
+ * Every joint used to ease at one rate, which is why a gesture landed like a
+ * hand of cards being laid down flat: correct, and lifeless. A shoulder leads,
+ * the elbow trails it, and the head arrives last, and that ordering is most of
+ * what separates animation from interpolation.
+ *
+ * These are RATE MULTIPLIERS, not delays. If the body eases at `u = 1 - e^(-k·dt)`
+ * then `1 - (1-u)^f` is exactly the ease at rate `f·k` — so a channel at 0.6
+ * follows with a time constant 1/0.6 longer, and it stays frame-rate independent
+ * and still collapses to 1 when dt is huge. A delay line would need history and
+ * would break the moment a frame was dropped.
+ *
+ * The legs are deliberately NOT dragged. Their angles are solved by IK to keep a
+ * foot planted (see `walk`), and a leg that lags its solution is a foot that
+ * slides — the exact fault that rewrite existed to remove.
+ */
+const FOLLOW = {
+  /** the head. Follows the torso with visible weight, which is also why a head
+   *  cannot chase pointer noise: this lag is a low-pass filter with a body. */
+  tilt: 0.7,
+  /** shoulder leads, forearm trails: the whip at the end of a wave */
+  shoulder: 0.85,
+  elbow: 0.55,
+} as const;
+
 function blend(a: Pose, b: Pose, u: number): Pose {
+  // 1 - (1-u)^f is the same ease at f times the rate. Cheap, and exact.
+  const t = 1 - Math.pow(1 - u, FOLLOW.tilt);
+  const s = 1 - Math.pow(1 - u, FOLLOW.shoulder);
+  const e = 1 - Math.pow(1 - u, FOLLOW.elbow);
   return {
     x: lerp(a.x, b.x, u), y: lerp(a.y, b.y, u),
-    lean: lerp(a.lean, b.lean, u), tilt: lerp(a.tilt, b.tilt, u),
+    lean: lerp(a.lean, b.lean, u), tilt: lerp(a.tilt, b.tilt, t),
     sq: lerp(a.sq, b.sq, u), bre: lerp(a.bre, b.bre, u),
     face: lerp(a.face, b.face, u),
-    la: [lerp(a.la[0], b.la[0], u), lerp(a.la[1], b.la[1], u)],
-    ra: [lerp(a.ra[0], b.ra[0], u), lerp(a.ra[1], b.ra[1], u)],
+    la: [lerp(a.la[0], b.la[0], s), lerp(a.la[1], b.la[1], e)],
+    ra: [lerp(a.ra[0], b.ra[0], s), lerp(a.ra[1], b.ra[1], e)],
     ll: [lerp(a.ll[0], b.ll[0], u), lerp(a.ll[1], b.ll[1], u)],
     rl: [lerp(a.rl[0], b.rl[0], u), lerp(a.rl[1], b.rl[1], u)],
   };
@@ -459,18 +609,55 @@ export class Brain {
   private seed = 0x2f6e2b1;
   private peakPx = 0;
   private goal: XY | null = null;
+  /** authoritative ground position while walking; null when not walking */
+  private rootX: number | null = null;
   private vy = 0;                     // vertical speed while falling, world units/s
   private anchor: XY | null = null;   // where the line is hooked
   private flyFrom: XY = { x: 0, y: 0 };
   private flyDur = 1;
   private jNow: number[] = new Array(JOINTS).fill(0);
   private jNext: number[] = new Array(JOINTS).fill(0);
+  /** joints at the start of the painted frame, for the per-frame ceiling */
+  private jFrame: number[] = new Array(JOINTS).fill(0);
 
   /** Deterministic noise. Math.random would make Arta unreproducible, and the
    *  first thing you want when a behaviour looks wrong is to see it again. */
   private rnd(): number {
     this.seed = (this.seed * 1664525 + 1013904223) >>> 0;
     return this.seed / 0x100000000;
+  }
+
+  private drifts = [0, 1, 2].map(() => ({ v: 0, to: 0, left: 0 }));
+
+  /**
+   * A slow wander in [-1, 1]: pick a target, ease toward it, pick another.
+   *
+   * This replaced a sine, and the reason is worth keeping. Idle weight shift
+   * WAS three sines, and three sines always come back: spacing them by the
+   * golden ratio — the most irrational number there is, so the latest possible
+   * near-repeat — still left the head 99% self-similar after 50 seconds,
+   * because the Fibonacci convergents of phi are exactly where a near-repeat
+   * lands. A sum of periodic things is periodic, or near enough that a person
+   * watching will see the seam.
+   *
+   * Shifting your weight is not oscillation anyway. It is deciding to stand
+   * differently, holding that, and later deciding again. Re-targeting on a
+   * random interval also reverses direction LESS often than a sine does, which
+   * the shake metric likes.
+   *
+   * Re-target timing is driven by accumulated seconds, not by frames, so the
+   * same schedule and the same draws come out at any frame rate: still
+   * reproducible, which is the whole reason the PRNG is seeded.
+   */
+  private drift(i: number, dt: number, every: number): number {
+    const d = this.drifts[i];
+    d.left -= dt;
+    if (d.left <= 0) {
+      d.to = this.rnd() * 2 - 1;
+      d.left = every * (0.6 + 0.8 * this.rnd());
+    }
+    d.v += (d.to - d.v) * (1 - Math.exp(-1.1 * dt));
+    return d.v;
   }
 
   constructor(x: number, ground: number) {
@@ -542,6 +729,9 @@ export class Brain {
   }
 
   private enter(act: Act, opts: { at?: XY; x?: number } = {}) {
+    // The integrated walk root belongs to one walk. Carrying it into the next
+    // one would start that walk from wherever the last one was aiming.
+    if (act !== "walk") this.rootX = null;
     this.act = act;
     this.t = 0;
     if (opts.at) { this.aim = opts.at; this.aimAt = this.clock; }
@@ -554,14 +744,35 @@ export class Brain {
   step(dt: number, input: Input): Frame {
     let left = Math.min(Math.max(dt, 0), 0.25);   // a backgrounded tab must not fast-forward
     if (left <= 0) left = MAX_STEP;               // first frame, and the still() path
+    /*
+     * The per-frame ceiling belongs to the WHOLE step, not to each sub-step.
+     *
+     * MAX_PX_PER_FRAME exists to stop strobing between two frames the viewer
+     * actually sees. The clamp used to be applied inside tick(), so a 30 Hz
+     * frame — which sub-steps twice — was handed the budget twice and could
+     * paint 21 px of movement while claiming to honour a 12 px limit. Measured
+     * at 13.2 px with 34 frames over budget; invisible at 60 and 144 Hz, where
+     * one frame is one sub-step, which is why it survived every earlier run.
+     *
+     * So the allowance is computed once per painted frame and divided among the
+     * sub-steps by duration. Displacements across sub-steps can only partly
+     * cancel, never more than sum, so bounding the parts bounds the whole.
+     */
+    const span = left;
+    const allow = Math.min(SAFE.MAX_PX_PER_SEC * span, SAFE.MAX_PX_PER_FRAME) * input.scale;
+    joints(this.pose, this.jFrame);
     let drew = false;
     while (left > 1e-6) {
       const h = Math.min(left, MAX_STEP);
       left -= h;
-      this.tick(h, input);
+      this.tick(h, input, allow * (h / span));
       drew = true;
     }
-    if (drew) this.lastDraw = skeleton(this.pose);
+    if (drew) {
+      this.lastDraw = skeleton(this.pose);
+      // What the viewer saw, which is the number the invariant is about.
+      this.peakPx = spread(this.jFrame, joints(this.pose, this.jNext)) / input.scale;
+    }
     return {
       sk: this.lastDraw,
       act: this.act,
@@ -576,7 +787,7 @@ export class Brain {
     };
   }
 
-  private tick(dt: number, input: Input): void {
+  private tick(dt: number, input: Input, budget: number): void {
     this.clock += dt;
     this.t += dt;
     const settled = this.act === "idle" || this.act === "rest" || this.act === "perch";
@@ -610,15 +821,53 @@ export class Brain {
 
     switch (this.act) {
       case "walk": {
+        /*
+         * The root position is INTEGRATED, and the target handed to the ease is
+         * absolute. It used to be `want.x = this.pose.x + stepD` — a target
+         * redefined relative to wherever the body currently was, every frame.
+         * Against an exponential ease that is not a lag, it is a speed
+         * DIVISION: the body only ever covers `u` of each step, so Arta walked
+         * at 90 px/s instead of 210 at 60 Hz, and at 44 px/s at 144 Hz — a
+         * frame-rate-dependent speed inside a rig whose entire doctrine is
+         * frame-rate independence.
+         *
+         * It also broke the feet. The phase advanced by the INTENDED step while
+         * the body moved a fraction of it, so the legs cycled 2.3x faster than
+         * the ground went by: 26 px of skate per stance, in steady state,
+         * on top of whatever the gait itself did. Both faults are the same
+         * mistake, and an absolute target is the fix for both — a first-order
+         * ease tracking a ramp has a constant position lag and zero velocity
+         * error, so the body keeps up and the constant offset moves the feet
+         * and the root together, which is no skate at all.
+         */
         const tx = clamp(this.targetX ?? this.pose.x, input.minX, input.maxX);
-        const d = tx - this.pose.x;
+        if (this.rootX === null) this.rootX = this.pose.x;
+        const d = tx - this.rootX;
         const dir: Face = d >= 0 ? 1 : -1;
-        if (Math.abs(d) < 4) { this.enter("idle"); want = base; break; }
-        const speed = 210 * TRAITS.boldness;            // px/s
+        if (Math.abs(d) < 4 && Math.abs(tx - this.pose.x) < 6) {
+          this.rootX = null; this.enter("idle"); want = base; break;
+        }
+        /*
+         * Choose a speed the budget can actually afford, instead of walking at
+         * a fixed 210 px/s and letting the clamp throttle it.
+         *
+         * Those are not the same thing. The clamp slows the POSE while the gait
+         * phase keeps its own time, so a throttled walk is a walk whose legs
+         * cycle faster than its body travels — which is skating, and it is what
+         * the 30 Hz case measured: 28 px of drift per stance with the clamp
+         * firing on 7 frames. Fitting the speed to the frame keeps the contract
+         * between phase and ground intact, and a slower walk on a slow display
+         * is the correct answer anyway, because the anti-strobe ceiling is a
+         * fact about perception rather than a budget to be spent.
+         */
+        const speed = Math.min(210 * TRAITS.boldness, budget / dt / WALK.PEAK_RATIO);
         const stepD = Math.min(Math.abs(d), speed * dt) * Math.sign(d);
-        this.phase = (this.phase + Math.abs(stepD) / 110) % 1;
+        this.rootX += stepD;
+        // The phase is driven by the ground actually covered, so a stride is a
+        // stride no matter what the frame rate or the ease are doing.
+        this.phase = (this.phase + Math.abs(stepD) / WALK.CYCLE) % 1;
         want = walk(this.phase);
-        want.x = this.pose.x + stepD;
+        want.x = this.rootX;
         want.y = input.ground - RIG.HIP + want.y;
         this.facing = dir;
         break;
@@ -800,14 +1049,34 @@ export class Brain {
       }
     }
 
-    // breath and weight shift, at an amplitude that falls to zero under motion
+    /*
+     * Breath and weight shift — and, above all, an idle that does not LOOP.
+     *
+     * These four oscillators used to run at 0.42, 0.21, 0.32 and 0.13 Hz: the
+     * first three are exact harmonics of one base (1, 1/2, 0.77), so the body
+     * returned to precisely the same state every few seconds. A short exact
+     * loop is the difference between a figure that is idling and a figure that
+     * is playing an idle, and half a minute of watching is enough to see it.
+     *
+     * Spacing the rates by the golden ratio makes the sum QUASI-PERIODIC: no
+     * two components share a rational ratio, so they never phase-lock and the
+     * combination never repeats, while each one individually stays a plain
+     * sine that cannot surprise the speed ceiling. Breath depth also drifts on
+     * a 27 s cycle, far below anything the calm rules count as an oscillation,
+     * because a body that breathes to a metronome is a body being animated.
+     */
     const calm = moving ? 0 : 1;
     if (calm > 0) {
-      const w = 2 * Math.PI * 0.42 * this.clock;
-      want.bre *= 1 + 0.026 * calm * Math.sin(w);
-      want.lean += 1.5 * calm * Math.sin(2 * Math.PI * 0.13 * this.clock + 0.7);
-      want.tilt += 2.0 * calm * Math.sin(w * 0.5 + 2.2);
-      const sway = 1.6 * calm * Math.sin(w * 0.77 + 1.4);
+      // The breath stays a sine, because breathing really is periodic — but its
+      // depth drifts on a 27 s cycle, far under anything the calm rules count
+      // as an oscillation, because a body that breathes to a metronome is a
+      // body being animated.
+      const depth = 1 + 0.25 * Math.sin(2 * Math.PI * 0.037 * this.clock);
+      want.bre *= 1 + 0.026 * calm * depth * Math.sin(2 * Math.PI * BREATH * this.clock);
+      // Everything else wanders. See `drift`.
+      want.lean += 1.6 * calm * this.drift(0, dt, 5.5);
+      want.tilt += 2.2 * calm * this.drift(1, dt, 4.0);
+      const sway = 1.8 * calm * this.drift(2, dt, 6.5);
       want.la = [want.la[0] + sway, want.la[1]];
       want.ra = [want.ra[0] - sway, want.ra[1]];
     }
@@ -817,7 +1086,7 @@ export class Brain {
     // correctly from a dropped frame; a fixed per-frame fraction does neither.
     // A walk tracks its cycle almost rigidly (the cycle IS the animation); a
     // gesture arrives softly.
-    const k = this.act === "walk" ? 34 : 11;
+    const k = this.act === "walk" ? 60 : 11;
     let u = 1 - Math.exp(-k * dt);
     let next = blend(this.pose, want, u);
 
@@ -827,8 +1096,6 @@ export class Brain {
     // having a fast limb amputated from a slow torso. Because the measurement
     // is over every drawn point, this covers root motion, limb swing and
     // turning at once, and a gesture added later cannot escape it.
-    const budgetPx = Math.min(SAFE.MAX_PX_PER_SEC * dt, SAFE.MAX_PX_PER_FRAME);
-    const budget = budgetPx * input.scale;
     joints(this.pose, this.jNow);
     let moved = spread(this.jNow, joints(next, this.jNext));
     // ITERATE. `u *= budget / moved` assumes displacement is linear in the blend
@@ -848,7 +1115,6 @@ export class Brain {
       next = blend(this.pose, want, u);
       moved = spread(this.jNow, joints(next, this.jNext));
     }
-    this.peakPx = moved / input.scale;
     this.pose = next;
   }
 }

@@ -363,10 +363,105 @@ commanded trip.
 
 ---
 
+## 12c. The gait, and why it is solved rather than posed
+
+Arta's legs are the one place in the rig where joint angles are an OUTPUT.
+
+A walk is judged almost entirely on one thing: does the planted foot stay
+planted. The first version drove both legs as sinusoids in antiphase and let the
+root advance at a constant speed, with nothing tying the two together — and they
+disagreed by a lot. Through what should have been the left leg's stance the foot
+slid 47 px forward and 19 px back across the ground. No foot was ever planted,
+which is why the figure read as gliding, and it had been that way from the first
+day because joint angles are the easy thing to animate and contact is the thing
+that matters.
+
+So the FOOT PATH is authored and the joints are solved by two-link IK:
+
+- **Stance** — the foot does not move in the world, so relative to the advancing
+  root it slides straight back at exactly the root's speed. That identity is the
+  whole design.
+- **Swing** — a cubic Hermite whose end slopes MATCH the stance velocity, so the
+  foot is still travelling backwards as it leaves the ground and again as it
+  lands. Anything else changes the foot's velocity in a single frame, and that
+  showed up as a knee whipping at 810 px/s just after toe-off. Lift is `sin²`,
+  flat at both ends, for the same reason.
+- **Hip height** — each foot says `h ≤ lift + √(REACH² − dx²)` and the lower
+  answer wins, so the hip rides a circular arc over the planted foot: the
+  compass gait, and the reason the knee does not pop mid-stance.
+- **Stance fraction above 0.5** — the overlap is double support, and double
+  support is the entire difference between a walk and a run.
+
+`WALK.CYCLE` is read by the brain rather than copied into it. Phase and ground
+travel are one contract; two copies of a number is two chances to break it.
+
+**Measured:** planted-foot drift 40.9 px → 0.00 px in the pose, and ≤ 1.8 px
+live at 30, 60 and 144 Hz.
+
+---
+
+## 12d. Speed is chosen to fit the budget, not clipped by it
+
+Those are different things, and the difference is visible.
+
+The gait's fastest point (the knee, just after toe-off) travels ~3.6× the root
+speed. At 210 px/s that is over the ceiling, so the clamp fired — and a clamped
+walk is a walk whose POSE is slowed while its phase keeps its own time, which is
+to say a walk whose legs cycle faster than its body travels. That is skating,
+and it measured 28 px of drift per stance at 30 Hz.
+
+So the walk asks the frame what it can afford and picks a speed that fits:
+`min(210, budget / dt / PEAK_RATIO)`. Above about 45 Hz that is 168 px/s and
+frame-rate independent; below it Arta genuinely walks slower, which is the
+correct answer, because the anti-strobe ceiling is a fact about perception and
+not a budget to be spent.
+
+**Any act that moves the body fast must do this.** Being clipped afterwards is
+never as good as not asking for too much.
+
+---
+
 ## 13. Anti-patterns
 
 Every one of these was actually done here, found by looking, and fixed.
 
+- **Spending the per-frame ceiling once per SUB-STEP.** `step()` sub-steps at
+  1/45 s, and the clamp lived inside the sub-step, so a 30 Hz frame — which
+  sub-steps twice — was handed the budget twice and painted 13.2 px against a
+  12 px limit. Invisible at 60 and 144 Hz, where one frame is one sub-step,
+  which is exactly why it survived every earlier run. A limit about what the
+  viewer sees between two painted frames has to be computed per painted frame.
+- **Defining a moving target RELATIVE to the current pose.** The walk set
+  `want.x = pose.x + stepD` every frame. Against an exponential ease that is not
+  a lag, it is a speed DIVISION: the body only ever covers `u` of each step, so
+  Arta walked at 90 px/s instead of 210 at 60 Hz — and at 44 px/s at 144 Hz,
+  frame-rate-dependent motion inside a rig whose whole doctrine is frame-rate
+  independence. Integrate the position and hand the ease an ABSOLUTE target;
+  tracking a ramp then has a constant position lag and zero velocity error.
+- **A `min` over a set whose membership changes.** Hip height was the minimum
+  over the feet currently DOWN, and that set changes four times a cycle, so `h`
+  stepped 1.3 px at each change. A knee near full extension is worth about six
+  degrees per pixel of reach, so a 1.3 px step threw it 3.6 px sideways in one
+  frame. Let each member relax its own constraint continuously (a raised foot
+  loosens by exactly its lift) and the set disappears along with the pop.
+- **Believing a sum of sines will not repeat.** Idle weight shift was three
+  sines. Spacing them by the golden ratio — the most irrational number there is,
+  so the latest possible near-repeat — still left the head 99% self-similar
+  after 50 seconds, because the Fibonacci convergents of φ are precisely where a
+  near-repeat lands. Shifting your weight is not oscillation anyway: it is
+  deciding to stand differently, holding it, and deciding again. Seeded drift,
+  re-targeted on a random interval, never repeats and reverses direction LESS
+  often than a sine.
+- **Easing every joint at one rate.** A shoulder leads, an elbow trails, a head
+  arrives last, and that ordering is most of what separates animation from
+  interpolation. `1 - (1-u)^f` is the same ease at `f` times the rate, so
+  per-channel follow costs one `pow` and stays frame-rate independent. Do NOT
+  drag a leg: its angles are an IK solution for a planted foot, and a leg that
+  lags its solution is a foot that slides.
+- **Measuring motion off the rendered path strings.** They round to 0.1 px, so a
+  probe that samples finely enough measures the ROUNDING and reports nonsense —
+  in one run, a peak speed of 99× the root speed. Sample at real frame steps, or
+  read the numbers before they are formatted.
 - **A raised arm through the skull.** Wave at 152° from the shoulder.
 - **The arrow as a rope.** Drawing hand→target as one line across the page.
 - **A lollipop.** Reusing the film's closed stance at mascot scale.
