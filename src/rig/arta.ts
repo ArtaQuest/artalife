@@ -170,6 +170,20 @@ export function skeleton(p: Pose): Skeleton {
 export const stand = (): Pose => P();
 
 /**
+ * How far the lower foot hangs below the hip in this pose.
+ *
+ * Placing the hip at `surface - footDrop(pose)` is the definition of standing
+ * on something, and it holds for any pose — which is the point. Every act that
+ * plants Arta should use it rather than carrying its own hand-tuned offset,
+ * because a hand-tuned offset is only right for the pose it was tuned against.
+ */
+export function footDrop(p: Pose): number {
+  const l = limb(0, 0, p.ll[0] * p.face, p.ll[1] * p.face, RIG.THIGH * p.sq, RIG.SHIN * p.sq);
+  const r = limb(0, 0, p.rl[0] * p.face, p.rl[1] * p.face, RIG.THIGH * p.sq, RIG.SHIN * p.sq);
+  return Math.max(l.ey, r.ey);
+}
+
+/**
  * Two-link IK. `tx`/`ty` are hip-relative (x right, y DOWN, matching the rig's
  * world). Returns the [thigh, shin] angle pair in the pose convention.
  *
@@ -339,9 +353,19 @@ export const cheer = (): Pose => P({
   la: [146, 10], ra: [-146, -10], ll: [26, -46], rl: [-24, -44],
 });
 
+/**
+ * The absorb, and the anticipation before a jump.
+ *
+ * `y` and the knee bend have to AGREE. A crouch lowers the hip by exactly as
+ * much as it shortens the legs, or the feet go somewhere the body is not: at
+ * y 26 with the old [26, -62] knee the legs only shortened by 15, so the feet
+ * finished 11 px UNDER the surface. `floorUnder` then read that ledge as being
+ * above the feet, discarded it, found nothing else, and Arta fell through the
+ * floor it had just landed on — every rope trip, for as long as this existed.
+ */
 export const crouch = (): Pose => P({
   y: 26, lean: 14, tilt: 6,
-  la: [-34, 8], ra: [-40, 6], ll: [26, -62], rl: [-22, -58],
+  la: [-34, 8], ra: [-40, 6], ll: [26, -80], rl: [-22, -58],
 });
 
 /** Weight on one leg, a hand up near the head. Thinking, without a face to do it with. */
@@ -549,6 +573,38 @@ export function nearestStand(floors: Floor[], x: number): number | null {
   return best;
 }
 
+/**
+ * The nearest place Arta could actually STAND, as a point rather than an x.
+ *
+ * `nearestStand` answers only "which ledge is closest horizontally", which is
+ * the wrong question whenever the answer is overhead: Arta walked to the spot
+ * beneath the card, arrived no higher than it started, still failed the
+ * on-a-card test, and set off again. With every ledge above it, that is a loop
+ * — and it is why Arta sat on the stage floor with a 24 px gap to the nearest
+ * real surface for as long as the page was open.
+ *
+ * Cost is 2D and asymmetric, because climbing is not strolling: a ledge
+ * overhead is charged 1.8x its height, one below is nearly free (that is a
+ * fall, and gravity is already paid for). Anything higher than the rope can
+ * reach is not a candidate at all.
+ */
+const CLIMB_COST = 1.8;
+const CLIMB_MAX = 420;
+export function nearestPerch(
+  floors: Floor[], x: number, feetY: number,
+): { x: number; y: number } | null {
+  let best: { x: number; y: number } | null = null, bestC = Infinity;
+  for (const f of floors) {
+    if (f.x2 - f.x1 < 120) continue;                 // too narrow to stand on
+    const up = feetY - f.y;                          // >0 when the ledge is above
+    if (up > CLIMB_MAX) continue;                    // out of the rope's reach
+    const cx = Math.min(Math.max(x, f.x1 + 60), f.x2 - 60);
+    const c = Math.abs(cx - x) + (up > 0 ? CLIMB_COST * up : 0.15 * -up);
+    if (c < bestC) { bestC = c; best = { x: cx, y: f.y }; }
+  }
+  return best;
+}
+
 export function floorUnder(floors: Floor[], x: number, feetY: number, ground: number): number {
   let best = ground;
   for (const f of floors) {
@@ -684,8 +740,11 @@ export class Brain {
       return;
     }
     // Hook the line ABOVE the destination, so the arrival is a descent onto it
-    // rather than a slide into it.
-    this.anchor = { x: goal.x, y: goal.y - 150 };
+    // rather than a slide into it — but the hook has to be somewhere that
+    // exists. World y starts at 0 at the top of the stage, and a goal high on
+    // the page put the anchor at y = -14: Arta flew off the top of its own
+    // viewBox to reach a card near the header. Take whatever headroom there is.
+    this.anchor = { x: goal.x, y: Math.max(goal.y - 150, Math.min(goal.y - 30, 30)) };
     this.goal = goal;
     this.facing = dx >= 0 ? 1 : -1;
     this.enter("throw");
@@ -959,15 +1018,27 @@ export class Brain {
         const fy = floorUnder(input.floors, this.pose.x, this.pose.y + RIG.HIP, input.ground);
         want = blend(crouch(), P(), ease(u));
         want.x = this.pose.x;
-        want.y = fy - RIG.HIP + (crouch().y * (1 - ease(u)));
+        // Wherever the absorb has the knees, the feet are on the surface.
+        want.y = fy - footDrop(want);
         if (u >= 1) { this.anchor = null; this.goal = null; this.enter("idle"); }
         break;
       }
       case "fall": {
-        // Gravity, with a terminal speed the frame-to-frame ceiling can absorb.
+        /*
+         * Gravity, with a terminal speed the frame-to-frame ceiling can absorb.
+         *
+         * The support is looked up from where the feet are at the START of this
+         * step, not where they will be at the end. Asking about the end is a
+         * point test against a moving body, and `floorUnder` discards any ledge
+         * already above the feet — so a ledge crossed WITHIN one step is
+         * discarded as though Arta were already past it, and Arta falls
+         * straight through. Measured: feet at 488 one frame, 507 the next, and
+         * a card at 500 that never existed. Testing from the start of the step
+         * makes it a swept test, and `Math.min` puts the feet exactly on it.
+         */
         this.vy = Math.min(this.vy + 2200 * dt, 900);
         const ny = this.pose.y + this.vy * dt;
-        const land = floorUnder(input.floors, this.pose.x, ny + RIG.HIP, input.ground) - RIG.HIP;
+        const land = floorUnder(input.floors, this.pose.x, feet, input.ground) - RIG.HIP;
         want = P({ x: this.pose.x, y: Math.min(ny, land), lean: -6, tilt: -8,
                    la: [128, 18], ra: [-124, -16], ll: [18, -26], rl: [-16, -30] });
         if (ny >= land) { this.vy = 0; this.enter("land"); }
@@ -1001,21 +1072,57 @@ export class Brain {
           const u = Math.sin(Math.PI * clamp((this.glanceUntil - this.clock) / 1.1, 0, 1));
           want.tilt += 14 * this.glanceDir * u * TRAITS.curiosity;
         }
-        // adventurous: stillness eventually turns into a few steps
+        /*
+         * Adventurous: stillness eventually turns into going somewhere. But
+         * "somewhere" has to be somewhere Arta can BE.
+         *
+         * This used to pick a random x across the whole stage and walk to the
+         * horizontally nearest ledge — height ignored. Standing on a card, that
+         * means walking off the end of it. Arta then fell, climbed back up,
+         * wandered off the edge again, and spent 25 of every 60 seconds in the
+         * air; it was on a real surface 4% of the time. Walking off a ledge is
+         * not exploring, it is falling.
+         *
+         * So: stroll along the ledge you are on, and now and then rope across
+         * to a different one. Both stay on a floor, which is the rule.
+         */
         if (this.idleFor > TRAITS.restlessness && !input.busy) {
-          const span = input.maxX - input.minX;
-          const wish = input.minX + span * (0.15 + 0.7 * this.rnd());
-          const to = nearestStand(input.floors, wish) ?? wish;
           this.idleFor = 0;
-          if (Math.abs(to - this.pose.x) > 60) this.enter("walk", { x: to });
+          const feetNow = this.pose.y + RIG.HIP;
+          const here = input.floors.find(
+            (f) => this.pose.x >= f.x1 - 8 && this.pose.x <= f.x2 + 8 && Math.abs(f.y - feetNow) < 12);
+          const others = input.floors.filter((f) => f !== here && f.x2 - f.x1 >= 120);
+          if (here && others.length && this.rnd() < 0.35) {
+            const f = others[Math.floor(this.rnd() * others.length)];
+            const x = f.x1 + 60 + (f.x2 - f.x1 - 120) * this.rnd();
+            this.travelTo({ x, y: f.y - RIG.HIP });
+          } else if (here) {
+            const lo = here.x1 + 60, hi = here.x2 - 60;
+            const to = lo + Math.max(0, hi - lo) * this.rnd();
+            if (Math.abs(to - this.pose.x) > 60) this.enter("walk", { x: to });
+          } else {
+            const span = input.maxX - input.minX;
+            const wish = input.minX + span * (0.15 + 0.7 * this.rnd());
+            const to = nearestStand(input.floors, wish) ?? wish;
+            if (Math.abs(to - this.pose.x) > 60) this.enter("walk", { x: to });
+          }
         }
         // Standing on the fallback floor is not standing on anything. If there
-        // is a real ledge to be on, go and be on it.
+        // is a real ledge to be on, go and be on it — and "go" has to include
+        // UPWARD, or a page whose cards are all overhead leaves Arta walking to
+        // a spot underneath one, arriving no higher, failing this same test and
+        // setting off again. That loop is why Arta sat on the stage floor with
+        // a measured 24 px gap to the nearest real surface.
         if (input.floors.length && this.idleFor > 1.2) {
+          const feetNow = this.pose.y + RIG.HIP;
           const onCard = input.floors.some(
-            (f) => this.pose.x >= f.x1 && this.pose.x <= f.x2 && Math.abs(f.y - (this.pose.y + RIG.HIP)) < 30);
-          const to = onCard ? null : nearestStand(input.floors, this.pose.x);
-          if (to !== null && Math.abs(to - this.pose.x) > 24) { this.enter("walk", { x: to }); break; }
+            (f) => this.pose.x >= f.x1 && this.pose.x <= f.x2 && Math.abs(f.y - feetNow) < 30);
+          const spot = onCard ? null : nearestPerch(input.floors, this.pose.x, feetNow);
+          if (spot) {
+            const up = feetNow - spot.y;
+            if (up > 12) { this.idleFor = 0; this.travelTo({ x: spot.x, y: spot.y - RIG.HIP }); break; }
+            if (Math.abs(spot.x - this.pose.x) > 24) { this.enter("walk", { x: spot.x }); break; }
+          }
         }
         // and eventually it sits down
         if (this.idleFor > TRAITS.patience) this.enter("rest");

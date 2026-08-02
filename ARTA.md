@@ -356,10 +356,23 @@ as it does to a step. And **reduced motion cannot travel** — no loop runs, so 
 rope trip would strand Arta hanging forever; that path relocates instead
 (`Brain.placeAt`).
 
-**Open:** when every ledge on screen is *above* Arta, it stays on the stage
-floor — `floorUnder` only looks downward, and relocation only moves sideways.
-Climbing to a ledge overhead needs the rope wired into idle, not only into a
-commanded trip.
+**Getting onto a ledge overhead** used to be impossible, and the reason was
+that relocation asked the wrong question. `nearestStand` answers "which ledge is
+closest horizontally", so Arta walked to the spot beneath a card, arrived no
+higher than it started, failed the same on-a-card test and set off again.
+`nearestPerch` returns a POINT and prices the trip in 2D, charging 1.8x for
+height — climbing is not strolling — and anything overhead goes by rope.
+
+**Wandering has to stay on a surface too.** The restless walk picked a random x
+across the whole stage and went to the horizontally nearest ledge, which from
+the top of a card means walking off the end of it. Arta fell, climbed back,
+walked off again, and spent 25 seconds of every 60 in the air. It now strolls
+along the ledge it is on and now and then ropes across to a different one.
+Walking off a ledge is not exploring, it is falling.
+
+**Measured**, on a page whose ledges are all overhead: on a real ledge 4% → 92%
+of settled time, airborne 25 s → 3.6 s per minute, worst gap while settled
+24.2 px → 1.4 px.
 
 ---
 
@@ -462,6 +475,22 @@ Every one of these was actually done here, found by looking, and fixed.
   probe that samples finely enough measures the ROUNDING and reports nonsense —
   in one run, a peak speed of 99× the root speed. Sample at real frame steps, or
   read the numbers before they are formatted.
+- **A pose that lowers the hip without shortening the legs to match.** `crouch`
+  dropped the hip 26 px while its knee bend only shortened the legs by 15, so
+  the feet finished 11 px UNDER the surface. `floorUnder` then read that ledge
+  as being above the feet, discarded it, found nothing else beneath, and Arta
+  fell through the floor it had just landed on — on every rope trip, for as long
+  as the pose existed. `footDrop(pose)` exists so no act has to hand-tune this:
+  the hip goes at `surface - footDrop`, and that is true for any pose.
+- **A point test against a moving body.** The fall looked up its support from
+  where the feet would be at the END of the step, and `floorUnder` discards
+  ledges above the feet — so a ledge crossed WITHIN one step was discarded as
+  though Arta were already past it. Feet at 488 one frame, 507 the next, and a
+  card at 500 that never existed. Test from the START of the step and it is a
+  swept test.
+- **Hooking the rope somewhere that does not exist.** The anchor is 150 above
+  the destination, which for a card near the top of the page put it at y = -14:
+  Arta flew off the top of its own viewBox. Take whatever headroom there is.
 - **A raised arm through the skull.** Wave at 152° from the shoulder.
 - **The arrow as a rope.** Drawing hand→target as one line across the page.
 - **A lollipop.** Reusing the film's closed stance at mascot scale.
