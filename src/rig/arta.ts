@@ -220,7 +220,7 @@ function legIK(tx: number, ty: number): [number, number] {
  */
 export const WALK = {
   /** px the root advances per full cycle (two steps) */
-  CYCLE: 110,
+  CYCLE: 150,
   /** fraction of the cycle each foot is planted. Above 0.5 by design: the
    *  overlap is the double-support phase, and double support is the entire
    *  difference between a walk and a run. */
@@ -232,6 +232,21 @@ export const WALK = {
   REACH: 103,
   /** swing-foot ground clearance */
   LIFT: 16,
+  /**
+   * Midstance leg shortening — the third determinant of gait, and the reason
+   * the stride could grow without the bob growing with it.
+   *
+   * Hip bob here is DERIVED, not authored: the compass gait puts the hip on a
+   * circular arc over the planted foot, so lengthening the stride raises the
+   * arc. At CYCLE 110 the bob was 4.4 units, about 4% of leg length, which is
+   * what a person does. At 150 the same geometry gives 8.3 — nearly a tenth of
+   * the leg, a caricature bounce. Real knees flex through midstance and flatten
+   * exactly that arc, which is what this term is.
+   *
+   * 3.5 costs about 18 degrees of extra knee flexion at midstance and brings
+   * the bob back to 4.8. 5.5 would be 25 degrees and reads as a crouch-walk.
+   */
+  DIP: 3.5,
   /**
    * How fast the quickest drawn point moves, as a multiple of the root speed.
    * Measured off this gait, not guessed: the knee just after toe-off, at 3.6x,
@@ -308,8 +323,11 @@ export const walk = (ph: number): Pose => {
    * returns to zero as it lands, which is precisely when its constraint has to
    * start binding again.
    */
+  const half = (WALK.STANCE * WALK.CYCLE) / 2;
   const cap = (f: { dx: number; lift: number }) =>
-    f.lift + Math.sqrt(Math.max(1, WALK.REACH ** 2 - f.dx * f.dx));
+    f.lift + Math.sqrt(Math.max(1, WALK.REACH ** 2 - f.dx * f.dx))
+    // flatten the compass arc through midstance, where the leg is most upright
+    - WALK.DIP * Math.max(0, 1 - (f.dx / half) ** 2);
   const h = Math.min(cap(l), cap(r));
   // Arms oppose legs — the left arm swings with the RIGHT leg. Smooth rather
   // than tracking dx, which is piecewise linear and would read as mechanical.
@@ -960,7 +978,21 @@ export class Brain {
          * is the correct answer anyway, because the anti-strobe ceiling is a
          * fact about perception rather than a budget to be spent.
          */
-        const speed = Math.min(210 * TRAITS.boldness, budget / dt / WALK.PEAK_RATIO);
+        /*
+         * 210 px/s over a 110 px cycle was 1.91 cycles a second — 229 steps a
+         * minute, against about 110 for a person, with a stride barely one leg
+         * length instead of one and a half. It was a walk cycle played at a
+         * sprint's tempo, which is the classic wrong-frame-rate read. 165 over
+         * a 150 px cycle is 132 steps a minute and a 1.44 leg-length stride.
+         *
+         * And it BRAKES. Arriving went from full speed to nothing in a single
+         * frame, absorbed only by the ease. Slowing over the last ~90 units
+         * shortens the strides while the beat holds — which is what slowing
+         * down actually looks like — and it is free, because the phase is
+         * already driven by ground covered rather than by time.
+         */
+        const brake = clamp(Math.abs(d) / 90, 0.3, 1);
+        const speed = Math.min(165 * TRAITS.boldness * brake, budget / dt / WALK.PEAK_RATIO);
         const stepD = Math.min(Math.abs(d), speed * dt) * Math.sign(d);
         this.rootX += stepD;
         // The phase is driven by the ground actually covered, so a stride is a
