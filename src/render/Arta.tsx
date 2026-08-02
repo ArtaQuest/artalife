@@ -51,12 +51,18 @@ export type ArtaProps = {
   /** Draw the hairline Arta stands on. */
   ground?: boolean;
   className?: string;
-  /** Screen-reader description. Arta is decorative unless it is doing a job. */
-  label?: string;
+  /*
+   * There is deliberately no `label`. Arta is decorative unless it is doing a
+   * job, and the label it used to carry — passed unconditionally at the mount —
+   * described what it LOOKS like, on every route, for the whole session. A
+   * screen-reader user met a stick figure at the end of every page and it led
+   * nowhere. If a caller ever makes Arta carry information alone, fix that at
+   * the caller; do not describe the decoration.
+   */
 };
 
 export default function Arta({
-  height = 220, start = 0.5, range = [0.08, 0.92], ground = true, className, label,
+  height = 220, start = 0.5, range = [0.08, 0.92], ground = true, className,
   fill = false, figure = 132,
 }: ArtaProps) {
   // Destructured to stable primitives: a `[a, b]` literal prop is a new array
@@ -261,6 +267,22 @@ export default function Arta({
     // Stated in CSS px so it means the same thing at every stage size.
     const DEAD = 4 * scale;
     const onMove = (e: PointerEvent) => {
+      /*
+       * A finger is not a look.
+       *
+       * On a touch device a pointer exists ONLY while something is pressed, so
+       * head-tracking — the behaviour the rig calls the single biggest
+       * contributor to seeming alive — was, on the majority device, driven
+       * exclusively by the drag and scroll that law 3 says must silence Arta.
+       * `onScroll` only damps the look to 35%; it does not end it. And while
+       * `look` is non-null the idle glance is suppressed outright, so a phone
+       * visitor got the stare and none of the character.
+       *
+       * A tap and a scroll are the same class of event, so a touch gets the
+       * same 450 ms of quiet that a scroll does. A pen keeps tracking, because
+       * a stylus hovers and hovering really is a cursor.
+       */
+      if (e.pointerType === "touch") { busyUntil = performance.now() + 450; return; }
       const p = toWorld(e.clientX, e.clientY);
       if (!rawLook || Math.hypot(p.x - rawLook.x, p.y - rawLook.y) > DEAD) rawLook = p;
     };
@@ -339,7 +361,12 @@ export default function Arta({
     ro.observe(el);
     const unsubscribe = onArtaCommand(onCmd);
     window.addEventListener("pointermove", onMove, { passive: true });
+    // pointerup and pointercancel too: a lifted stylus, a cancelled gesture and
+    // a native scroll takeover must all clear the look through one path rather
+    // than relying on pointerleave firing for a non-hover pointer.
     window.addEventListener("pointerleave", onLeave);
+    window.addEventListener("pointerup", onLeave);
+    window.addEventListener("pointercancel", onLeave);
     window.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("keydown", onKey, { passive: true });
     document.addEventListener("visibilitychange", onVis);
@@ -355,6 +382,8 @@ export default function Arta({
       unsubscribe();
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerleave", onLeave);
+      window.removeEventListener("pointerup", onLeave);
+      window.removeEventListener("pointercancel", onLeave);
       window.removeEventListener("scroll", onScroll);
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("visibilitychange", onVis);
@@ -369,9 +398,8 @@ export default function Arta({
         className="block h-full w-full overflow-visible"
         viewBox={`0 0 600 ${WORLD_H}`}
         preserveAspectRatio="xMidYMax meet"
-        role={label ? "img" : "presentation"}
-        aria-label={label}
-        aria-hidden={label ? undefined : true}
+        role="presentation"
+        aria-hidden="true"
       >
         {ground && (
           <line

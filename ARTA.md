@@ -491,6 +491,57 @@ Every one of these was actually done here, found by looking, and fixed.
 - **Hooking the rope somewhere that does not exist.** The anchor is 150 above
   the destination, which for a card near the top of the page put it at y = -14:
   Arta flew off the top of its own viewBox. Take whatever headroom there is.
+- **Blending an ABSOLUTE pose against a RELATIVE one, then adding the base
+  again.** `base` is `support - RIG.HIP`; every library pose carries an offset.
+  `cheer` blended the two and then added `base.y`, asking for twice the support
+  height — on the shipped mount, a hip target 800 CSS px below the floor, for
+  the anticipation and again for the recovery. Only the speed clamp contained
+  it, and a clamp is a rate, not a veto, so Arta visibly sank and climbed back
+  on every successful sign-in. Blend relative against relative.
+- **Targeting the stage floor from an act that runs on a ledge.** The walk set
+  `want.y = input.ground - RIG.HIP + …`, discarding the support resolved fifty
+  lines earlier. On a card the first walking frame aimed a card's height too
+  low, the feet went under the ledge, `floorUnder` discarded it as being above
+  them, and the act became `fall` — so Arta could never walk on a card at all,
+  and the bug was invisible on any page without one, because there the support
+  IS the ground.
+- **Scaling the legs to squash.** `turn` used `sq`, which multiplies THIGH and
+  SHIN, so a 6% squash lifted both feet clear of the ledge for the whole turn:
+  a figure that hops slightly whenever it changes direction. Squash the spine.
+- **A state that is none of the three permitted ones.** `perch` put the hip on
+  the rope's hook, which left the drawn grip 135 units above it holding nothing,
+  150 above whatever Arta had travelled to see, with no line drawn and no exit
+  condition — and it was the DEFAULT branch out of a flight. Deleted. A rope
+  trip now ends through the same contact code as a step off a lip.
+- **Resetting a counter before deciding whether to act on it.** `idleFor` was
+  zeroed whenever restlessness fired, before the distance test that decides
+  whether a walk actually starts, so it never exceeded 7 s and
+  `TRAITS.patience` (75 s) was unreachable: `rest()`, a fully authored pose,
+  had never once been drawn. Patience also measured the wrong clock — Arta has
+  an idea every 7 seconds, so its own stillness can never reach 75. Sitting
+  down is a response to an empty ROOM. Measure the visitor.
+- **Gating a behaviour on the PRESENCE of a pointer.** The idle glance required
+  `!input.look`, and `look` is non-null from the first mousemove to the last, so
+  on any ordinary desktop visit it never fired. Gate on the pointer being
+  STILL: a hand resting on a mouse is not a hand using one.
+- **An envelope that spends its randomness on silence.** The glance drove
+  `sin(pi * clamp((end - now) / 1.1, 0, 1))` over a duration randomised up to
+  1.9 s, and the clamp pins the argument at 1 — so `sin(pi) = 0` for the whole
+  excess. A 1.9 s glance was 0.8 s of nothing followed by the same 1.1 s move.
+- **Treating a finger as a cursor.** On a touch device a pointer exists only
+  while something is pressed, so head-tracking was driven exclusively by the
+  drag and scroll that law 3 says must silence Arta — and because a non-null
+  look also suppresses the glance, a phone visitor got the stare and none of
+  the character. A tap is a scroll: give it the same quiet window. A pen keeps
+  tracking, because a stylus hovers.
+- **Labelling the decoration.** `aria-label="Arta, the ArtaQuest mascot"` was
+  passed unconditionally, so a screen-reader user met a stick figure at the end
+  of every page and it led nowhere. Arta is `aria-hidden` unless it is doing a
+  job, and the label then says what it is DOING.
+- **Editing markup with a regex.** Removing that label with
+  `re.sub(r'\s*label="[^"]*"', ...)` matched the mobile navigation's
+  `aria-label="Quick navigation"` first and turned it into `aria-`. Caught only
+  by reading the diff. Match the whole element, or edit the exact string.
 - **A raised arm through the skull.** Wave at 152° from the shoulder.
 - **The arrow as a rope.** Drawing hand→target as one line across the page.
 - **A lollipop.** Reusing the film's closed stance at mascot scale.

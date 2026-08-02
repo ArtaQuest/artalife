@@ -170,6 +170,19 @@ export function skeleton(p: Pose): Skeleton {
 export const stand = (): Pose => P();
 
 /**
+ * Author a pose whose SOLES sit on the support line: `y` becomes the offset
+ * from the support, the same convention `walk` already returns.
+ *
+ * Every `y:` in the library was a hand-tuned constant, and not one of them was
+ * solved against the sole line — `peer` sat 5.2 units through the ledge,
+ * `rest` 4.5, `shrug` 2.5, `think` 2.3, and `fall` floated 3.1 above it. Those
+ * are small, but the sign matters far more than the size: a sole below the
+ * support means `floorUnder` reads the ledge as being ABOVE the feet, discards
+ * it, and drops Arta through the floor it is standing on.
+ */
+const grounded = (p: Pose): Pose => ({ ...p, y: RIG.HIP - footDrop(p) });
+
+/**
  * How far the lower foot hangs below the hip in this pose.
  *
  * Placing the hip at `surface - footDrop(pose)` is the definition of standing
@@ -363,27 +376,27 @@ export const cheer = (): Pose => P({
  * above the feet, discarded it, found nothing else, and Arta fell through the
  * floor it had just landed on — every rope trip, for as long as this existed.
  */
-export const crouch = (): Pose => P({
-  y: 26, lean: 14, tilt: 6,
+export const crouch = (): Pose => grounded(P({
+  lean: 14, tilt: 6,
   la: [-34, 8], ra: [-40, 6], ll: [26, -80], rl: [-22, -58],
-});
+}));
 
 /** Weight on one leg, a hand up near the head. Thinking, without a face to do it with. */
-export const think = (): Pose => P({
+export const think = (): Pose => grounded(P({
   y: 4, lean: -6, tilt: 8,
   la: [22, 16], ra: [-132, -52], ll: [14, -10], rl: [-20, -30],
-});
+}));
 
 /** Leaning in to read something — the truth-seeker's default posture. */
-export const peer = (): Pose => P({
+export const peer = (): Pose => grounded(P({
   y: 10, lean: 30, tilt: 10,
   la: [40, 60], ra: [48, 56], ll: [24, -30], rl: [-22, -28],
-});
+}));
 
-export const shrug = (): Pose => P({
+export const shrug = (): Pose => grounded(P({
   y: 3, tilt: 4,
   la: [64, -78], ra: [-66, 76], ll: [8, -8], rl: [-10, -8],
-});
+}));
 
 /** Sitting. Arta rests when nothing has happened for a long time. */
 /**
@@ -408,10 +421,10 @@ export const hang = (sway: number): Pose => P({
   ll: [26 * sway - 8, -34], rl: [26 * sway + 10, -22],
 });
 
-export const rest = (): Pose => P({
+export const rest = (): Pose => grounded(P({
   y: 46, lean: -8, tilt: 4,
   la: [56, 66], ra: [-52, -70], ll: [74, -96], rl: [66, -104],
-});
+}));
 
 /**
  * Every drawn joint, world coords, flat — what the speed limit is measured on.
@@ -524,7 +537,7 @@ export type Act =
   | "shrug" | "rest" | "turn"
   // rope travel: the archer's arrow carries the line, so the grapple is the
   // signature gesture doing work rather than a second mechanic bolted on
-  | "throw" | "fly" | "land" | "perch" | "fall";
+  | "throw" | "fly" | "land" | "fall";
 
 export type Input = {
   /** pointer in Arta's world coords, or null when the pointer is elsewhere */
@@ -647,9 +660,14 @@ export class Brain {
   private aim: XY | null = null;
   private aimAt = 0;
   private queue: Array<{ act: Act; at?: XY; x?: number }> = [];
-  private glanceUntil = 0;
+  private glanceFrom = -99;
+  private glanceDur = 1.4;
+  private lookAt: XY | null = null;
+  private lookStill = 0;
+  private quietFor = 0;
   private glanceDir = 1;
   private nextGlance = 4;
+  private nextWander: number = TRAITS.restlessness;
   /**
    * The INTENDED facing, always exactly 1 or -1. `pose.face` is the continuous
    * value easing toward it.
@@ -664,10 +682,12 @@ export class Brain {
   private facing: Face = 1;
   private seed = 0x2f6e2b1;
   private peakPx = 0;
-  private goal: XY | null = null;
   /** authoritative ground position while walking; null when not walking */
   private rootX: number | null = null;
   private vy = 0;                     // vertical speed while falling, world units/s
+  private impact = 0;                 // speed at touchdown — how hard to absorb
+  private fellFrom: number | null = null; // hip height where this fall began
+  private fallY = 0;                  // integrated height while falling
   private anchor: XY | null = null;   // where the line is hooked
   private flyFrom: XY = { x: 0, y: 0 };
   private flyDur = 1;
@@ -745,7 +765,6 @@ export class Brain {
     // the page put the anchor at y = -14: Arta flew off the top of its own
     // viewBox to reach a card near the header. Take whatever headroom there is.
     this.anchor = { x: goal.x, y: Math.max(goal.y - 150, Math.min(goal.y - 30, 30)) };
-    this.goal = goal;
     this.facing = dx >= 0 ? 1 : -1;
     this.enter("throw");
   }
@@ -759,7 +778,6 @@ export class Brain {
   placeAt(goal: XY, ground: number) {
     this.queue.length = 0;
     this.anchor = null;
-    this.goal = null;
     this.act = "idle";
     this.t = 0;
     this.pose = { ...this.pose, x: goal.x, y: Math.min(goal.y, ground - RIG.HIP) };
@@ -791,6 +809,7 @@ export class Brain {
     // The integrated walk root belongs to one walk. Carrying it into the next
     // one would start that walk from wherever the last one was aiming.
     if (act !== "walk") this.rootX = null;
+    if (act !== "fall") this.fellFrom = null;
     this.act = act;
     this.t = 0;
     if (opts.at) { this.aim = opts.at; this.aimAt = this.clock; }
@@ -835,7 +854,10 @@ export class Brain {
     return {
       sk: this.lastDraw,
       act: this.act,
-      rope: this.anchor && (this.act === "throw" || this.act === "fly")
+      // Only once it has CAUGHT. Including `throw` drew the line taut to a
+      // point in empty air for the whole 0.42 s wind-up — tied before it was
+      // thrown.
+      rope: this.anchor && this.act === "fly"
         ? { from: this.lastDraw.hand, to: this.anchor } : null,
       airborne: this.act === "fly",
       arrow: this.act === "point" && this.aim
@@ -849,7 +871,7 @@ export class Brain {
   private tick(dt: number, input: Input, budget: number): void {
     this.clock += dt;
     this.t += dt;
-    const settled = this.act === "idle" || this.act === "rest" || this.act === "perch";
+    const settled = this.act === "idle" || this.act === "rest";
 
     // ── law 3: while the visitor works, Arta stops having ideas ─────────────
     if (input.busy && settled) this.idleFor = 0;
@@ -872,11 +894,30 @@ export class Brain {
     const base = P({ x: this.pose.x, y: support - RIG.HIP });
 
     // Unsupported and not on a line? Then Arta is falling, and says so.
-    const onLine = this.act === "fly" || this.act === "throw" || this.act === "perch";
+    const onLine = this.act === "fly" || this.act === "throw";
     if (!onLine && this.act !== "fall" && support - feet > 26) {
       this.vy = 0;
       this.enter("fall");
     }
+
+    /*
+     * Is anyone there? Measured once, above the switch, because two different
+     * behaviours need it.
+     *
+     * `lookStill` gates the glance: a hand resting on a mouse is not a hand
+     * using one. `quietFor` is how long the VISITOR has done nothing, which is
+     * what `TRAITS.patience` was always meant to mean. It used to be read off
+     * `idleFor` — time since Arta last had an idea — and Arta has an idea every
+     * 7 seconds, so 75 seconds of it could not occur and `rest()`, a fully
+     * authored pose, has never once been drawn on this site. Sitting down is a
+     * response to an empty room, not to one's own stillness.
+     */
+    const lookShift = input.look && this.lookAt
+      ? Math.hypot(input.look.x - this.lookAt.x, input.look.y - this.lookAt.y) : 999;
+    this.lookStill = lookShift > 24 ? 0 : this.lookStill + dt;
+    if (input.look) this.lookAt = { x: input.look.x, y: input.look.y };
+    const active = input.busy || (input.look !== null && lookShift > 24);
+    this.quietFor = active ? 0 : this.quietFor + dt;
 
     switch (this.act) {
       case "walk": {
@@ -927,7 +968,15 @@ export class Brain {
         this.phase = (this.phase + Math.abs(stepD) / WALK.CYCLE) % 1;
         want = walk(this.phase);
         want.x = this.rootX;
-        want.y = input.ground - RIG.HIP + want.y;
+        // The SUPPORT, not the stage floor. `base.y` was resolved from
+        // `floorUnder` fifty lines above and `walk` returns `RIG.HIP - h`
+        // precisely so the two compose. Targeting `input.ground` instead put
+        // the hip a card's whole height too low on the first walking frame,
+        // the feet then dropped below the ledge, `floorUnder` discarded it as
+        // being above them, and the act became `fall` — so Arta could never
+        // walk on a card at all. Identical behaviour when there are no cards,
+        // because then the support IS the ground.
+        want.y = base.y + want.y;
         this.facing = dir;
         break;
       }
@@ -950,9 +999,19 @@ export class Brain {
       case "cheer": {
         // crouch, launch, land — anticipation and recovery, or it reads as a shrug
         const u = this.t / 1.35;
-        want = u < 0.18 ? blend(base, crouch(), ease(u / 0.18))
+        /*
+         * Blend RELATIVE against RELATIVE. `base` is absolute — `support -
+         * RIG.HIP` — while every library pose carries an offset, so blending
+         * the two and then adding `base.y` again asked for twice the support
+         * height: on the shipped mount that is a hip target 800 CSS px below
+         * the floor, for the 0.24 s anticipation and again for the recovery.
+         * Only the speed clamp was containing it, and a clamp is a rate rather
+         * than a veto, so Arta visibly sank and climbed back. This fires on
+         * every successful sign-in.
+         */
+        want = u < 0.18 ? blend(P(), crouch(), ease(u / 0.18))
              : u < 0.86 ? blend(crouch(), cheer(), Math.sin(Math.PI * ((u - 0.18) / 0.68)))
-             : blend(crouch(), base, ease((u - 0.86) / 0.14));
+             : blend(crouch(), P(), ease((u - 0.86) / 0.14));
         want.x = base.x; want.y = base.y + want.y;
         if (this.t > 1.35) this.enter("idle");
         break;
@@ -968,7 +1027,10 @@ export class Brain {
       case "rest": {
         const r = rest();
         want = { ...r, x: base.x, y: base.y + r.y };
-        if (!input.busy && input.look) this.enter("idle");   // it wakes when noticed
+        // Woken by a CHANGE, not by a presence. `input.look` is non-null for
+        // the whole of any desktop visit, so waking on it meant standing up on
+        // the very next frame after sitting down.
+        if (active || this.queue.length) this.enter("idle");
         break;
       }
       case "throw": {
@@ -999,7 +1061,22 @@ export class Brain {
         // Land only if the destination is near the ground. If it is high up,
         // Arta stays on the line — hanging beside the thing you are reading is
         // the whole reason a mascot owns a rope.
-        if (u >= 1) this.enter((this.goal?.y ?? base.y) > base.y - 110 ? "land" : "perch");
+        // Arriving on a line is a controlled descent, not a drop: absorb lightly.
+        /*
+         * Always `fall`. This used to branch to `perch` whenever the goal was
+         * high — the common case — and `perch` was the one state in the system
+         * that is none of the three permitted ones: not on a ledge, not falling
+         * to one, and not on the rope either, because the rope is only drawn
+         * during `throw` and `fly`. It put the HIP on the hook, which left the
+         * drawn grip 135 units above it holding nothing, 150 above whatever
+         * Arta had travelled to see, and nothing in the tick ever ended it. On
+         * /arta, pressing Travel left a gold figure floating indefinitely.
+         *
+         * Handing the last stretch to gravity means a rope trip terminates
+         * through exactly the same contact code as a step off a lip. One
+         * implementation, not two.
+         */
+        if (u >= 1) this.enter("fall");
         break;
       }
       case "land": {
@@ -1009,18 +1086,39 @@ export class Brain {
          * Two defects found by reading this against the acts that reach it. It
          * blended from `hang(0)`, but `fall` also lands here and a figure that
          * walked off a ledge was never hanging — it snapped into a hang for one
-         * frame first. And it steered x toward `this.goal`, which is only set by
-         * a rope trip: after a plain fall the goal was whatever an earlier
-         * traversal had left there, so touchdown yanked Arta sideways across the
-         * page. Both vanish once landing simply means "absorb, here".
+         * frame first. And it steered x toward a stored goal, which only a rope
+         * trip ever set: after a plain fall that goal was whatever an earlier
+         * traversal had left behind, so touchdown yanked Arta sideways across
+         * the page. Both vanish once landing simply means "absorb, here" — and
+         * with nothing left reading it, the stored goal is gone too.
          */
-        const u = clamp(this.t / 0.4, 0, 1);
+        /*
+         * How hard you land is how hard you absorb. A fixed crouch for every
+         * arrival tells the viewer that a step off a kerb and a drop from the
+         * top of the page cost the same, which is the fastest way to make a
+         * figure look weightless — weight is only ever communicated by what it
+         * costs to stop.
+         *
+         * Depth and duration both scale with the touchdown speed. `footDrop`
+         * then places the hip from whatever knees that produced, which is the
+         * whole reason it exists: a variable crouch has no fixed offset to
+         * hand-tune.
+         */
+        const hard = clamp(this.impact / 260, 0.28, 1);   // 260 px is a fall worth a full absorb
+        const u = clamp(this.t / (0.26 + 0.26 * hard), 0, 1);
         const fy = floorUnder(input.floors, this.pose.x, this.pose.y + RIG.HIP, input.ground);
-        want = blend(crouch(), P(), ease(u));
+        // Down fast, HOLD, then up slowly. The hold is not decoration: the pose
+        // chases this target through an ease, and a target that has already
+        // started rising is one the body never catches — every drop absorbed an
+        // identical 8 px whatever it had fallen, which is the weightlessness
+        // this was written to remove. Compression is quick and recovery is
+        // slow, which is also the shape of a real landing.
+        const c = u < 0.2 ? 1 : 1 - ease((u - 0.2) / 0.8);
+        want = blend(P(), blend(P(), crouch(), hard), c);
         want.x = this.pose.x;
         // Wherever the absorb has the knees, the feet are on the surface.
         want.y = fy - footDrop(want);
-        if (u >= 1) { this.anchor = null; this.goal = null; this.enter("idle"); }
+        if (u >= 1) { this.anchor = null; this.enter("idle"); }
         break;
       }
       case "fall": {
@@ -1036,41 +1134,93 @@ export class Brain {
          * a card at 500 that never existed. Testing from the start of the step
          * makes it a swept test, and `Math.min` puts the feet exactly on it.
          */
-        this.vy = Math.min(this.vy + 2200 * dt, 900);
-        const ny = this.pose.y + this.vy * dt;
+        /*
+         * The height is integrated, and terminal speed is whatever the frame can
+         * actually paint.
+         *
+         * Both matter, and for the same reason. `ny = pose.y + vy*dt` measures
+         * from a body the clamp is holding back, so the target crept down while
+         * vy went on accumulating: every drop, including a 30 px one, arrived at
+         * the 900 terminal speed, and the "impact" the landing scaled itself by
+         * was a fact about a number rather than about Arta. Capping the fall at
+         * a speed the ceiling permits means the body keeps up and vy is once
+         * again the speed of the thing you can see.
+         */
+        /*
+         * Height is INTEGRATED, like the walk's root, and for the same reason:
+         * `pose.y + vy*dt` is a target defined relative to a body the ease is
+         * holding back, so the body only ever covers a fraction of each step.
+         * A 400 px drop took 5.3 seconds — gravity that floats.
+         *
+         * The integrator has to be paired with a tracking rate high enough that
+         * the body stays with it. When it was not, the fall's own numbers
+         * reached the floor some 80 px before Arta did and the landing began in
+         * mid-air, whereupon gravity saw an unsupported figure and started the
+         * fall again. Terminal speed is capped at what the frame can paint, and
+         * `k` for a fall is 60, so the residual lag is v/k — about 7 px, well
+         * inside the 26 px that counts as unsupported.
+         */
+        if (this.fellFrom === null) { this.fellFrom = this.pose.y; this.fallY = this.pose.y; }
+        this.vy = Math.min(this.vy + 2200 * dt, (budget / dt) * 0.7, 900);
+        this.fallY += this.vy * dt;
+        const ny = this.fallY;
         const land = floorUnder(input.floors, this.pose.x, feet, input.ground) - RIG.HIP;
         want = P({ x: this.pose.x, y: Math.min(ny, land), lean: -6, tilt: -8,
                    la: [128, 18], ra: [-124, -16], ll: [18, -26], rl: [-16, -30] });
-        if (ny >= land) { this.vy = 0; this.enter("land"); }
-        break;
-      }
-      case "perch": {
-        const a = this.anchor ?? { x: this.pose.x, y: this.pose.y };
-        want = hang(0.35 * Math.sin(2 * Math.PI * 0.26 * this.clock));
-        want.x = a.x; want.y = a.y;
+        if (ny >= land) {
+          // How FAR it fell, not how fast. Speed saturates within a few frames
+          // — every drop from 30 px to 400 arrived at the same number — and it
+          // is measured on a body the clamp is holding back, so it describes
+          // the simulation rather than the thing anyone can see. Distance does
+          // not saturate and is exactly what the viewer watched happen.
+          this.impact = this.fallY - this.fellFrom;
+          this.vy = 0; this.fellFrom = null;
+          this.enter("land");
+        }
         break;
       }
       case "turn": {
         // Just the squash. The facing itself is already set, and `face` eases
         // continuously through zero on its own — the act exists to give the
         // turn a little weight, not to drive it.
-        want = { ...base, sq: 1 - 0.06 * Math.sin(Math.PI * clamp(this.t / 0.3, 0, 1)) };
+        // Squash the SPINE, not the legs. ARTA.md forbids scaling `sq` here by
+      // name: it scales THIGH and SHIN, so a 6% squash lifted both feet 6.2
+      // world units clear of the ledge for the whole turn — a figure that
+      // hops slightly every time it changes direction.
+      want = { ...base, bre: 1 - 0.06 * Math.sin(Math.PI * clamp(this.t / 0.3, 0, 1)) };
         if (this.t >= 0.3) this.enter("idle");
         break;
       }
       default: {
         want = base;
-        // curious: with nothing to look at, Arta looks around anyway. The glance
-        // has to LAST — a one-tick tilt is invisible, which is what the first
-        // version of this did.
-        if (this.idleFor > this.nextGlance && !input.look && !input.busy) {
+        /*
+         * Curious: Arta looks around on its own. Two faults kept this from ever
+         * being seen.
+         *
+         * It was gated on `!input.look`, and `look` is non-null from the first
+         * pointermove until the pointer leaves the window — so on any ordinary
+         * desktop visit the glance NEVER fired, and idle was breath plus mouse
+         * tracking and nothing else. Gate on the pointer being STILL instead:
+         * a hand resting on a mouse is not a hand using one.
+         *
+         * And the envelope was dead air. `(glanceUntil - clock) / 1.1` starts
+         * above 1 whenever the duration is randomised past 1.1 s, and the clamp
+         * pins it there, so `sin(pi)` is zero for the whole excess — a 1.9 s
+         * glance was 0.8 s of nothing followed by the same 1.1 s move. Driving
+         * the envelope from elapsed time over the actual duration spends the
+         * randomness on the glance rather than on a pause.
+         */
+        if (this.idleFor > this.nextGlance && !input.busy && (!input.look || this.lookStill > 3)) {
           this.nextGlance = this.idleFor + 5 + 4 * this.rnd();
-          this.glanceUntil = this.clock + 1.1 + 0.8 * this.rnd();
+          this.glanceFrom = this.clock;
+          this.glanceDur = 1.1 + 0.8 * this.rnd();
           this.glanceDir = this.rnd() < 0.5 ? -1 : 1;
         }
-        if (this.clock < this.glanceUntil) {
-          const u = Math.sin(Math.PI * clamp((this.glanceUntil - this.clock) / 1.1, 0, 1));
-          want.tilt += 14 * this.glanceDir * u * TRAITS.curiosity;
+        const gu = (this.clock - this.glanceFrom) / this.glanceDur;
+        if (gu >= 0 && gu <= 1) {
+          // Smaller when there IS something to look away from.
+          want.tilt += (input.look ? 10 : 14) * this.glanceDir
+                     * Math.sin(Math.PI * gu) * TRAITS.curiosity;
         }
         /*
          * Adventurous: stillness eventually turns into going somewhere. But
@@ -1086,8 +1236,19 @@ export class Brain {
          * So: stroll along the ledge you are on, and now and then rope across
          * to a different one. Both stay on a floor, which is the rule.
          */
-        if (this.idleFor > TRAITS.restlessness && !input.busy) {
-          this.idleFor = 0;
+        /*
+         * `idleFor` used to be zeroed here unconditionally — before the tests
+         * below decided whether to walk at all — so it was bounded by
+         * restlessness plus a frame, `TRAITS.patience` (75 s) could never be
+         * reached, and `rest()`, a fully authored pose, has never once been
+         * drawn on this site. A separate deadline absorbs the failed attempts
+         * and leaves `idleFor` monotonic; only a walk that actually starts
+         * resets it. Zeroing it inside the tests instead would re-roll the PRNG
+         * every frame past the threshold, which would cost sixty draws a second
+         * and the reproducibility the generator exists for.
+         */
+        if (this.idleFor > this.nextWander && !input.busy) {
+          this.nextWander = this.idleFor + TRAITS.restlessness;
           const feetNow = this.pose.y + RIG.HIP;
           const here = input.floors.find(
             (f) => this.pose.x >= f.x1 - 8 && this.pose.x <= f.x2 + 8 && Math.abs(f.y - feetNow) < 12);
@@ -1095,16 +1256,23 @@ export class Brain {
           if (here && others.length && this.rnd() < 0.35) {
             const f = others[Math.floor(this.rnd() * others.length)];
             const x = f.x1 + 60 + (f.x2 - f.x1 - 120) * this.rnd();
+            this.idleFor = 0; this.nextWander = TRAITS.restlessness;
             this.travelTo({ x, y: f.y - RIG.HIP });
           } else if (here) {
             const lo = here.x1 + 60, hi = here.x2 - 60;
             const to = lo + Math.max(0, hi - lo) * this.rnd();
-            if (Math.abs(to - this.pose.x) > 60) this.enter("walk", { x: to });
+            if (Math.abs(to - this.pose.x) > 60) {
+              this.idleFor = 0; this.nextWander = TRAITS.restlessness;
+              this.enter("walk", { x: to });
+            }
           } else {
             const span = input.maxX - input.minX;
             const wish = input.minX + span * (0.15 + 0.7 * this.rnd());
             const to = nearestStand(input.floors, wish) ?? wish;
-            if (Math.abs(to - this.pose.x) > 60) this.enter("walk", { x: to });
+            if (Math.abs(to - this.pose.x) > 60) {
+              this.idleFor = 0; this.nextWander = TRAITS.restlessness;
+              this.enter("walk", { x: to });
+            }
           }
         }
         // Standing on the fallback floor is not standing on anything. If there
@@ -1125,7 +1293,7 @@ export class Brain {
           }
         }
         // and eventually it sits down
-        if (this.idleFor > TRAITS.patience) this.enter("rest");
+        if (this.quietFor > TRAITS.patience) this.enter("rest");
         break;
       }
     }
@@ -1193,7 +1361,10 @@ export class Brain {
     // correctly from a dropped frame; a fixed per-frame fraction does neither.
     // A walk tracks its cycle almost rigidly (the cycle IS the animation); a
     // gesture arrives softly.
-    const k = this.act === "walk" ? 60 : 11;
+    // A landing has to arrive before it recovers, so it tracks harder than a
+    // gesture; a walk tracks its own cycle almost rigidly.
+    const k = this.act === "walk" || this.act === "fall" ? 60
+            : this.act === "land" ? 26 : 11;
     let u = 1 - Math.exp(-k * dt);
     let next = blend(this.pose, want, u);
 
