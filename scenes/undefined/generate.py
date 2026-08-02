@@ -994,9 +994,29 @@ def lint():
                 pk, pi = d, i
         worst.append((pk, tag.split("/")[-1], pi / fps, tag))
     worst.sort(reverse=True)
-    print("  worst per-frame jumps (units/frame) — a teleport or a pop shows up here:")
+    # The same motion-safety law the live rig enforces, converted to this film's
+    # cadence. ARTA.md caps continuous motion at MAX_PX_PER_SEC = 640 world
+    # units per second; the film holds each drawing for two frames of 24, so a
+    # new drawing every 1/12 s may travel 640/12 = 53 units. (The rig's other
+    # ceiling, 12 units per frame, is an anti-strobe rule for 60 Hz-class motion
+    # and does not transfer to a film on twos.)
+    #
+    # This USED to print the table and assert nothing, which is a check that
+    # cannot fail and therefore protects nothing. It reports a verdict now, and
+    # --strict makes it a gate. It is not strict by default because the
+    # published film has tracks above the line and a gate that is red on arrival
+    # gets ignored rather than fixed; the loud list is the honest middle.
+    budget = 640.0 / 12.0
+    over = [w for w in worst if w[0] > budget]
+    print(f"  worst per-frame jumps (units/frame; budget {budget:.0f} = 640/s at 12 drawings/s):")
     for k, short, at, tag in worst[:9]:
-        print(f"    {k:8.1f}  t={at:5.2f}s  {short:16s} {tag[-42:]}")
+        print(f"    {'OVER' if k > budget else '  ok'} {k:8.1f}  t={at:5.2f}s  {short:16s} {tag[-42:]}")
+    if over:
+        print(f"  {len(over)} track(s) exceed the per-drawing budget — a jump this size reads as a cut.")
+    else:
+        print("  every track is inside the per-drawing budget.")
+    if over and "--strict" in sys.argv:
+        raise SystemExit(f"lint: {len(over)} track(s) over the {budget:.0f} unit budget")
 
 def main():
     here = os.path.dirname(os.path.abspath(__file__))

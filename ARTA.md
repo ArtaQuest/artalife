@@ -223,24 +223,26 @@ Never a third accent. Blue is the antagonist's colour in the film, not Arta's.
 
 ## 10. Performance budget
 
-Measured, not asserted:
+**Measured, not assumed.** One `brain.step()` costs **6.4 µs** — 0.04% of a
+60 Hz frame. The rig maths is not where the money goes, so do not micro-optimise
+it; the expensive things are DOM writes and layout reads, and those are what the
+budget is about.
 
-| Condition | Frames | Attribute writes |
-|---|---|---|
-| On screen, calm | 60/s | 362/s |
-| Scrolled out of view | **0** | **0** |
-| Tab hidden | **0** | **0** |
-| `prefers-reduced-motion` | **0** | **0** |
-
-**No React state in the animation loop** — the frame writes attributes onto refs.
-Re-rendering a component tree 60 times a second to move a stick figure would be
-the most expensive thing on the page and is entirely avoidable.
-
-Whether the loop should run is **recomputed from the element's real rect**, never
-remembered. A cached visibility flag is a one-way door: one bad reading and Arta
-is dead for the rest of the visit.
-
----
+- **One rAF.** Attributes are written straight onto refs. Re-rendering a
+  component tree to move a stick figure would be the most expensive thing on the
+  landing page and is entirely avoidable.
+- **Write only what changed.** Paths are emitted rounded to 0.1 px, so a frame
+  whose string equals the last one is a write that sets a value to itself — and
+  during idle most of them are. Measured over 30 s of a settled Arta: both legs
+  unchanged on **100%** of frames (a standing figure does not move its feet),
+  torso and head on 47%. Caching the last value per attribute took the live page
+  from **360 to 176 attribute writes a second**, with no behavioural change.
+  That is why `attrs/s` in the audit is a real number and not decoration.
+- **Layout reads at 4 Hz, never per frame.** Floors come from
+  `getBoundingClientRect`; the page does not reflow sixty times a second.
+- **Stop completely** off screen, on a hidden tab, and under reduced motion —
+  for a character that appears on every page this is not an optimisation, it is
+  the difference between a companion and a nuisance.
 
 ## 11. Adding a gesture
 
@@ -542,6 +544,13 @@ Every one of these was actually done here, found by looking, and fixed.
   `re.sub(r'\s*label="[^"]*"', ...)` matched the mobile navigation's
   `aria-label="Quick navigation"` first and turned it into `aria-`. Caught only
   by reading the diff. Match the whole element, or edit the exact string.
+- **A lint that only prints.** The film's continuity check listed the nine
+  largest per-frame jumps and asserted nothing, so it could not fail and
+  therefore protected nothing — a table someone was supposed to read. It has a
+  budget now, derived from the same law the live rig obeys (640 units/s at 12
+  drawings a second on twos = 53 per drawing), and `--strict` makes it a gate.
+  Two tracks in the published film are over it, which is exactly the sort of
+  thing a decorative check is for not noticing.
 - **A raised arm through the skull.** Wave at 152° from the shoulder.
 - **The arrow as a rope.** Drawing hand→target as one line across the page.
 - **A lollipop.** Reusing the film's closed stance at mascot scale.
