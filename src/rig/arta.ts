@@ -38,13 +38,34 @@
  */
 
 // ── geometry: identical to the published scene ──────────────────────────────
+/**
+ * The figure's proportions. Everything that can be DERIVED from them is, so a
+ * different figure stays internally consistent without anyone re-doing the
+ * arithmetic — and so the numbers cannot drift apart, which is the fault this
+ * file has spent most of its life fixing in one form or another.
+ *
+ * `HIP` was 104, which is THIGH + SHIN — a straight leg. The standing pose has
+ * a slight knee, so its soles are 103.6 below the hip, and the two numbers
+ * disagreed by 0.4 for every pose placed against the ground. `footDrop(stand())`
+ * is the only honest answer to "how high is the hip when standing", so it is
+ * the definition now rather than a constant that happens to be near it.
+ */
+const LIMB = { SPINE: 70, NECK: 24, HEAD_R: 20, THIGH: 52, SHIN: 52, UARM: 34, LARM: 32 } as const;
+
+/** The resting leg, [hip, knee]. Written ONCE: the default pose is built from
+ *  it and the standing hip height is solved from it, so the stance and the
+ *  height it implies cannot come apart. */
+const STANCE: readonly [number, number] = [7, -8];
+
+const legReach = (a1: number, a2: number) =>
+  LIMB.THIGH * Math.cos((a1 * Math.PI) / 180) + LIMB.SHIN * Math.cos(((a1 + a2) * Math.PI) / 180);
+
 export const RIG = {
-  SPINE: 70, NECK: 24, HEAD_R: 20,
-  THIGH: 52, SHIN: 52, UARM: 34, LARM: 32,
-  /** hip height above the ground when standing */
-  HIP: 104,
-  /** crown to sole */
-  HEIGHT: 218,
+  ...LIMB,
+  /** hip height above the ground when standing — SOLVED from the stance */
+  HIP: legReach(STANCE[0], STANCE[1]),
+  /** crown to sole — derived, so it cannot disagree with the parts */
+  get HEIGHT() { return this.HIP + LIMB.SPINE + LIMB.NECK + LIMB.HEAD_R; },
 } as const;
 
 export type XY = { x: number; y: number };
@@ -110,7 +131,8 @@ export const SAFE = {
 
 const P = (o: Partial<Pose> = {}): Pose => ({
   x: 0, y: 0, lean: 0, tilt: 0, face: 1,
-  la: [14, 15], ra: [-14, -15], ll: [7, -8], rl: [-7, -8], sq: 1, bre: 1, ...o,
+  la: [14, 15], ra: [-14, -15],
+  ll: [STANCE[0], STANCE[1]], rl: [-STANCE[0], STANCE[1]], sq: 1, bre: 1, ...o,
 });
 
 const rad = (d: number) => (d * Math.PI) / 180;
