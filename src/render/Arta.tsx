@@ -24,7 +24,7 @@
  * The command bus lives in ../lib/arta — it is not a component.
  */
 import { useEffect, useRef } from "react";
-import { Brain, RIG, SAFE, onArtaCommand, type Act, type Cmd, type Floor, type XY } from "../rig/arta";
+import { Brain, RIG, SAFE, homeFloor, onArtaCommand, type Act, type Cmd, type Floor, type XY } from "../rig/arta";
 
 /** World is 380 tall with the ground at 340 — enough headroom for the jump,
  *  whose raised hands reach about 330 above the sole. */
@@ -95,25 +95,50 @@ export default function Arta({
     let gnd = fill ? wh - 52 : GROUND;
     const brain = new Brain(vw * start, gnd);
 
-    // ── the floors ────────────────────────────────────────────────────────
-    // Arta stands on the bottom frame of a real card, never on nothing. Read at
-    // 4 Hz rather than per frame: these are layout reads, and the page does not
-    // reflow sixty times a second. Only in companion mode — inside a band there
-    // are no cards to stand on, so the band's own floor is the answer.
+    /*
+     * ── the floors ──────────────────────────────────────────────────────────
+     *
+     * A ledge is the TOP edge of a card, not the bottom.
+     *
+     * This had it inverted, and the result is the whole bug the operator caught:
+     * standing on a card's BOTTOM border puts the figure inside the card above
+     * it, so Arta's body covered the trending list's text while its feet met a
+     * line hidden behind the message dock. Feet on a lid, body in the clear —
+     * that is what standing on something looks like.
+     *
+     * `data-floor="bottom"` opts an element back into its lower edge for the
+     * cases where that really is the surface.
+     *
+     * Read at 4 Hz, never per frame: these are layout reads and the page does
+     * not reflow sixty times a second.
+     */
     let floors: Floor[] = [];
     let floorsAt = 0;
+    /** Put Arta on its home ledge the first time the page offers one, instead
+     *  of letting it start on the invisible stage floor and walk in. The first
+     *  thing a visitor sees should already be correct. */
+    let placed = false;
     const readFloors = (): Floor[] => {
       if (!fill) return [];
       const r = root.getBoundingClientRect();
       if (!r.width || !r.height) return [];
       const sx = vw / r.width, sy = wh / r.height;
       const out: Floor[] = [];
-      for (const c of document.querySelectorAll(".rounded-card, [data-floor]")) {
+      for (const c of document.querySelectorAll("[data-floor]")) {
         const b = c.getBoundingClientRect();
-        if (b.width < 90) continue;                       // too narrow to stand on
-        if (b.bottom < r.top - 40 || b.bottom > r.bottom + 40) continue;
+        if (b.width < 90) continue;                       // too narrow, or hidden
+        // A ledge must not MOVE when the page scrolls. Arta is a fixed layer,
+        // so an ordinary card's edge slides vertically past its soles — a
+        // surface that appears underfoot and is gone a moment later. Whatever
+        // tolerance you allow, a standing figure ends up bouncing its way down
+        // the page; the audit caught it as ten act changes in five seconds.
+        // Only something pinned to the viewport is somewhere to stand.
+        const pos = getComputedStyle(c).position;
+        if (pos !== "fixed" && pos !== "sticky") continue;
+        const edge = c.getAttribute("data-floor") === "bottom" ? b.bottom : b.top;
+        if (edge < r.top + 40 || edge > r.bottom - 40) continue;   // off stage
         out.push({ x1: (b.left - r.left) * sx, x2: (b.right - r.left) * sx,
-                   y: (b.bottom - r.top) * sy });
+                   y: (edge - r.top) * sy, home: c.hasAttribute("data-floor-home") });
       }
       return out;
     };
@@ -242,7 +267,10 @@ export default function Arta({
     // Painting at t=0 would show the arrow at the very start of its fade-in,
     // which is opacity 0 — the gesture would silently never appear.
     const still = () => {
-      const inp = { look: null, busy: true, ground: gnd, scale, floors: readFloors(),
+      const fl = readFloors();
+      const home = homeFloor(fl);
+      if (home && !placed) { placed = true; brain.placeAt({ x: (home.x1 + home.x2) / 2, y: home.y - RIG.HIP }, gnd); }
+      const inp = { look: null, busy: true, ground: gnd, scale, floors: fl,
                     minX: vw * rangeLo, maxX: Math.max(vw * rangeLo + 60, vw * rangeHi) };
       let f = brain.step(0, inp);
       for (let i = 0; i < 6; i++) f = brain.step(0.1, inp);
@@ -271,7 +299,13 @@ export default function Arta({
         const g = 1 - Math.exp(-4 * dt);
         look = { x: look.x + (rawLook.x - look.x) * g, y: look.y + (rawLook.y - look.y) * g };
       }
-      if (now - floorsAt > 250) { floors = readFloors(); floorsAt = now; }
+      if (now - floorsAt > 250) {
+        floors = readFloors(); floorsAt = now;
+        if (!placed) {
+          const home = homeFloor(floors);
+          if (home) { placed = true; brain.placeAt({ x: (home.x1 + home.x2) / 2, y: home.y - RIG.HIP }, gnd); }
+        }
+      }
       const f = brain.step(dt, {
         look, busy: now < busyUntil, ground: gnd, scale, floors,
         minX: vw * rangeLo, maxX: Math.max(vw * rangeLo + 60, vw * rangeHi),

@@ -600,7 +600,12 @@ export type Input = {
 };
 
 /** A horizontal ledge: the bottom frame of a card, from x1 to x2 at y. */
-export type Floor = { x1: number; x2: number; y: number };
+export type Floor = {
+  x1: number; x2: number; y: number;
+  /** Arta's home. Where it starts, and where it goes when it has nothing else
+   *  to do. Exactly one surface should carry this. */
+  home?: boolean;
+};
 
 /**
  * The floor Arta would land on from (x, feetY): the HIGHEST ledge that spans x
@@ -658,15 +663,39 @@ export function nearestPerch(
   return best;
 }
 
-export function floorUnder(floors: Floor[], x: number, feetY: number, ground: number): number {
+/**
+ * The surface under Arta's feet.
+ *
+ * `rise` is how far ABOVE the feet a ledge may still count — a step up. It is 0
+ * for a body in free fall, which can only ever land downward, and about a third
+ * of a leg while walking, because that is what stepping onto something is.
+ *
+ * Without it a walk could never gain height at all, and small rises are exactly
+ * the common case: the message dock's lid sits 33 units above the stage floor,
+ * and Arta walked to the right x, stayed at the wrong y, and stood in the air
+ * beside the thing it was supposed to be standing on. Throwing a grappling line
+ * to climb nineteen screen pixels is not the alternative.
+ */
+export function floorUnder(
+  floors: Floor[], x: number, feetY: number, ground: number, rise = 6,
+): number {
   let best = ground;
   for (const f of floors) {
     if (x < f.x1 - 8 || x > f.x2 + 8) continue;
-    if (f.y < feetY - 6) continue;          // above the feet — cannot land upward
+    if (f.y < feetY - rise) continue;       // too far above to step onto
     if (f.y < best) best = f.y;             // nearer than the current candidate
   }
   return best;
 }
+
+/** Arta's home ledge, if the page offers one. */
+export function homeFloor(floors: Floor[]): Floor | null {
+  for (const f of floors) if (f.home) return f;
+  return null;
+}
+
+/** How high Arta can step while walking, in world units — about a third of a leg. */
+export const STEP_UP = 34;
 
 export type Frame = {
   sk: Skeleton;
@@ -795,7 +824,10 @@ export class Brain {
   travelTo(goal: XY) {
     if (this.act === "throw" || this.act === "fly" || this.act === "land") return;
     const dx = goal.x - this.pose.x, dy = goal.y - this.pose.y;
-    if (Math.abs(dy) < 70 && Math.abs(dx) < 420) {
+    // A goal well above cannot be walked to, whatever the horizontal distance:
+    // a walk keeps whatever support is beneath it. Anything higher than one
+    // step needs the line.
+    if (-dy <= STEP_UP && Math.abs(dy) < 70 && Math.abs(dx) < 420) {
       if (Math.abs(dx) > 40) this.command("walk", { x: goal.x });
       return;
     }
@@ -930,7 +962,40 @@ export class Brain {
     // Gravity is not optional. The support under Arta is whatever ledge is
     // beneath its feet right now — a card's bottom frame, or the stage floor.
     const feet = this.pose.y + RIG.HIP;
-    const support = floorUnder(input.floors, this.pose.x, feet, input.ground);
+    /*
+     * Walking steps UP onto a low ledge; falling cannot, and a figure standing
+     * still generally should not either, or Arta would levitate onto anything
+     * that scrolled past just above its head.
+     *
+     * Home is the exception, and it has to be. Home is page-fixed rather than
+     * something drifting by, and Arta is often already at the right x — the
+     * phone's tab bar spans the whole width — so the walk that was supposed to
+     * carry it up had nowhere to go, exited on its first frame, and left Arta
+     * standing eighteen pixels under the bar it lives on, for good.
+     */
+    const homeF = homeFloor(input.floors);
+    /*
+     * When Arta has a home, home is the ONLY ledge.
+     *
+     * Home is page-fixed; a card is not. The page scrolls, so card ledges slide
+     * vertically past a companion that does not — and every one of them is a
+     * surface appearing under the soles and vanishing again a moment later.
+     * Whatever tolerance you allow, a standing figure ends up bouncing its way
+     * down the page: the audit caught it as nine act changes in five seconds,
+     * and narrowing the tolerance only made it two.
+     *
+     * So a page that names a home gets a companion that lives there, feet on
+     * that border, full stop. A page that names none keeps the old behaviour
+     * and stands on whatever cards it has. The cost is that an explicit
+     * `travelTo` elsewhere no longer has anything to stand on when it arrives;
+     * that is the right trade while "always on a border" is the rule, and the
+     * honest fix for it is per-element ledges that scroll WITH their element,
+     * which the Floor model cannot express today.
+     */
+    const support = homeF
+      ? floorUnder([homeF], this.pose.x, feet, input.ground, STEP_UP)
+      : floorUnder(input.floors, this.pose.x, feet, input.ground,
+                   this.act === "walk" ? STEP_UP : 6);
     const base = P({ x: this.pose.x, y: support - RIG.HIP });
 
     // Unsupported and not on a line? Then Arta is falling, and says so.
@@ -1306,7 +1371,19 @@ export class Brain {
           const feetNow = this.pose.y + RIG.HIP;
           const here = input.floors.find(
             (f) => this.pose.x >= f.x1 - 8 && this.pose.x <= f.x2 + 8 && Math.abs(f.y - feetNow) < 12);
-          const others = input.floors.filter((f) => f !== here && f.x2 - f.x1 >= 120);
+          /*
+           * With a home, Arta does not go wandering off it.
+           *
+           * It used to pick another ledge a third of the time, and the trip
+           * crosses the page on the invisible stage floor — so for several
+           * seconds the figure stands on nothing in the middle of the content,
+           * which is the one thing it must never do. Strolling along the ledge
+           * it lives on keeps its feet on a visible border at every instant.
+           * Anywhere else is still reachable, but only when something asks:
+           * `arta.travelTo(el)` is a deliberate act, a daydream is not.
+           */
+          const others = homeFloor(input.floors)
+            ? [] : input.floors.filter((f) => f !== here && f.x2 - f.x1 >= 120);
           if (here && others.length && this.rnd() < 0.35) {
             const f = others[Math.floor(this.rnd() * others.length)];
             const x = f.x1 + 60 + (f.x2 - f.x1 - 120) * this.rnd();
@@ -1320,13 +1397,15 @@ export class Brain {
               this.enter("walk", { x: to });
             }
           } else {
-            const span = input.maxX - input.minX;
-            const wish = input.minX + span * (0.15 + 0.7 * this.rnd());
-            const to = nearestStand(input.floors, wish) ?? wish;
-            if (Math.abs(to - this.pose.x) > 60) {
-              this.idleFor = 0; this.nextWander = TRAITS.restlessness;
-              this.enter("walk", { x: to });
-            }
+            // Standing on nothing: go HOME, not to whatever happens to be
+            // nearest horizontally. A wander that starts from mid-air is how
+            // Arta ended up 600 px from any border in the middle of a page.
+            const home = homeFloor(input.floors);
+            const to = home ? (home.x1 + home.x2) / 2
+                            : nearestStand(input.floors, this.pose.x) ?? this.pose.x;
+            this.idleFor = 0; this.nextWander = TRAITS.restlessness;
+            if (home && feetNow - home.y > STEP_UP) this.travelTo({ x: to, y: home.y - RIG.HIP });
+            else if (Math.abs(to - this.pose.x) > 24) this.enter("walk", { x: to });
           }
         }
         // Standing on the fallback floor is not standing on anything. If there
@@ -1339,11 +1418,20 @@ export class Brain {
           const feetNow = this.pose.y + RIG.HIP;
           const onCard = input.floors.some(
             (f) => this.pose.x >= f.x1 && this.pose.x <= f.x2 && Math.abs(f.y - feetNow) < 30);
-          const spot = onCard ? null : nearestPerch(input.floors, this.pose.x, feetNow);
+          const home = homeFloor(input.floors);
+          const onHome = !!home && this.pose.x >= home.x1 && this.pose.x <= home.x2
+                       && Math.abs(home.y - feetNow) < 12;
+          // Home wins whenever Arta is not already on it. Everything else is a
+          // place to visit; this is where it lives.
+          const spot = onHome ? null
+            : home ? { x: clamp(this.pose.x, home.x1 + 60, home.x2 - 60), y: home.y }
+            : onCard ? null : nearestPerch(input.floors, this.pose.x, feetNow);
           if (spot) {
             const up = feetNow - spot.y;
-            if (up > 12) { this.idleFor = 0; this.travelTo({ x: spot.x, y: spot.y - RIG.HIP }); break; }
-            if (Math.abs(spot.x - this.pose.x) > 24) { this.enter("walk", { x: spot.x }); break; }
+            this.idleFor = 0;
+            // One step is walked onto; anything higher is roped to.
+            if (up > STEP_UP) { this.travelTo({ x: spot.x, y: spot.y - RIG.HIP }); break; }
+            if (Math.abs(spot.x - this.pose.x) > 24 || up > 6) { this.enter("walk", { x: spot.x }); break; }
           }
         }
         // and eventually it sits down

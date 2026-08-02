@@ -326,6 +326,43 @@ tilt drift are three independent oscillations that legitimately sum to ~2/s).
 
 ---
 
+## 12a. Arta lives on the message box, and its feet are on a border
+
+Operator rule, 2026-08-02, and it outranks the wandering: **Arta's legs are on a
+visible border at every instant.** Its home is the Messaging dock — it stands on
+that panel's LID, and on a phone, where the dock is hidden, on the top edge of
+the bottom tab bar.
+
+Three things follow, and each replaced something that looked reasonable:
+
+- **A ledge is a TOP edge, not a bottom one.** Standing on a card's bottom
+  border puts the figure INSIDE the card above it: Arta's body covered the
+  trending list while its feet met a line hidden behind the dock. Feet on a lid,
+  body in the clear.
+- **A ledge must be pinned to the viewport** (`position: fixed` or `sticky`).
+  Arta is a fixed layer, so an ordinary card's edge slides vertically past its
+  soles — a surface that appears underfoot and is gone a moment later. Whatever
+  tolerance you allow, a standing figure bounces its way down the page; the
+  audit read it as ten act changes in five seconds. Ledges are marked with
+  `data-floor`, and `data-floor-home` names the one Arta lives on.
+- **With a home, Arta does not wander off it.** It used to rope to another ledge
+  a third of the time, and the trip crosses the page on the invisible stage
+  floor — several seconds standing on nothing, in the middle of the content.
+  It strolls along the ledge it lives on instead. Anywhere else is still
+  reachable, but only when something asks: `arta.travelTo(el)` is a deliberate
+  act, a daydream is not.
+
+Arta may also be LIFTED onto its home — only its home — because the phone's tab
+bar spans the whole width, so the walk meant to carry it up had nowhere to go,
+exited on its first frame, and left Arta standing eighteen pixels under the bar
+it lives on, permanently.
+
+**Verify by screenshot, never by reasoning.** The numbers said the soles were
+within a pixel of a floor while the viewer saw a figure standing in the middle
+of a paragraph.
+
+---
+
 ## 12b. Rope travel, and Arta everywhere
 
 Arta is a single page-level companion, not three per-page stages: one fixed
