@@ -357,6 +357,15 @@ bar spans the whole width, so the walk meant to carry it up had nowhere to go,
 exited on its first frame, and left Arta standing eighteen pixels under the bar
 it lives on, permanently.
 
+**A ledge is split around anything standing ON it.** The phone's tab bar carries
+a raised centre button that pokes 7 px above the bar's own top edge, and the bar
+paints above the companion layer — so Arta strolled through it with its ankles,
+and the contact point, hidden behind it. A border you cannot see Arta meeting
+does not satisfy the rule. A child that protrudes through the surface is an
+obstacle now, and the ledge becomes the clear runs either side; segments too
+narrow to stand on are dropped. Measured: Arta roamed x 47..351 across a blocker
+at 171..219, and now roams 33..137, clear of it.
+
 **Verify by screenshot, never by reasoning.** The numbers said the soles were
 within a pixel of a floor while the viewer saw a figure standing in the middle
 of a paragraph.
@@ -450,6 +459,19 @@ travel are one contract; two copies of a number is two chances to break it.
 **Measured:** planted-foot drift 40.9 px → 0.00 px in the pose, and ≤ 1.8 px
 live at 30, 60 and 144 Hz.
 
+**The ceiling holds through a TURN, at both figure sizes.** A turn negates every
+joint angle and is by a wide margin the largest gradient the rig can produce,
+and the browser audit drives the pointer in ways that may never provoke one — so
+it is checked directly instead: 24 turns at each of 128 px and 87 px, at 30, 60
+and 144 Hz, peak 9.55 px/frame against the tightest budget of 12. Note the
+mobile figure peaks LOWER (6.49) because the same angular motion is fewer CSS
+pixels at 68% scale; the ceiling is stated in CSS px, so a smaller Arta has more
+room, never less.
+
+Use the rig's own `peakPx` for this, never the drawn paths: those round to 0.1
+world units, and reading them back reports a phantom ~0.04 px of overshoot that
+is the rounding rather than the motion.
+
 ---
 
 ## 12d. Speed is chosen to fit the budget, not clipped by it
@@ -470,6 +492,12 @@ not a budget to be spent.
 
 **Any act that moves the body fast must do this.** Being clipped afterwards is
 never as good as not asking for too much.
+
+**And the posture has to agree with the speed.** A walk leans forward because it
+is falling into the next stride, so a figure that brakes to a standstill while
+holding a full 7° lean reads as stopped mid-shove rather than arrived. `brake`
+is already how much stride is left, so it is also how much lean is earned:
+measured 7.1° mid-stride, 4.3° with forty units to go, 3.6° on arrival.
 
 ---
 

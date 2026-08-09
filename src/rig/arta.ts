@@ -690,8 +690,13 @@ export function floorUnder(
 
 /** Arta's home ledge, if the page offers one. */
 export function homeFloor(floors: Floor[]): Floor | null {
-  for (const f of floors) if (f.home) return f;
-  return null;
+  // The WIDEST home segment, not the first. A ledge split around an obstacle
+  // yields several, and "whichever came first in the DOM" would be an arbitrary
+  // choice that changes when the markup is reordered; most room to stroll is at
+  // least a reason.
+  let best: Floor | null = null;
+  for (const f of floors) if (f.home && (!best || f.x2 - f.x1 > best.x2 - best.x1)) best = f;
+  return best;
 }
 
 /** How high Arta can step while walking, in world units — about a third of a leg. */
@@ -1086,6 +1091,19 @@ export class Brain {
         // stride no matter what the frame rate or the ease are doing.
         this.phase = (this.phase + Math.abs(stepD) / WALK.CYCLE) % 1;
         want = walk(this.phase);
+        /*
+         * Come UPRIGHT as you arrive.
+         *
+         * A walk leans forward because it is falling into the next stride. The
+         * braking above shortens the strides, but the lean stayed at a constant
+         * 7 degrees all the way to a standstill — a figure still pitched into a
+         * stride it is no longer taking, which is the posture of someone
+         * stopped mid-shove rather than someone who has arrived. `brake` is
+         * already how much stride is left, so it is also how much lean is
+         * earned; at the 0.3 floor Arta is nearly straight, and the last steps
+         * read as settling instead of stalling.
+         */
+        want.lean *= 0.3 + 0.7 * brake;
         want.x = this.rootX;
         // The SUPPORT, not the stage floor. `base.y` was resolved from
         // `floorUnder` fifty lines above and `walk` returns `RIG.HIP - h`

@@ -156,8 +156,33 @@ export default function Arta({
         if (pos !== "fixed" && pos !== "sticky") continue;
         const edge = c.getAttribute("data-floor") === "bottom" ? b.bottom : b.top;
         if (edge < r.top + 40 || edge > r.bottom - 40) continue;   // off stage
-        out.push({ x1: (b.left - r.left) * sx, x2: (b.right - r.left) * sx,
-                   y: (edge - r.top) * sy, home: c.hasAttribute("data-floor-home") });
+        /*
+         * Split the ledge around anything standing ON it.
+         *
+         * The phone's tab bar carries a raised centre button that pokes 7 px
+         * above the bar's own top edge, and the bar paints above the companion
+         * layer — so Arta strolled straight through x 171..219 with its ankles,
+         * and the contact point, hidden behind it. Feet on a VISIBLE border is
+         * the rule; a border you cannot see Arta meeting does not satisfy it.
+         *
+         * So a child that protrudes through the surface is an obstacle, and the
+         * ledge becomes the clear runs either side of it. Segments too narrow
+         * to stand on are dropped by the same 120-unit test everything else
+         * uses, which is also what stops a fussy layout producing confetti.
+         */
+        const blockers = [...c.querySelectorAll("*")]
+          .map((e) => e.getBoundingClientRect())
+          .filter((q) => q.width > 16 && q.top < edge - 2)
+          .sort((q1, q2) => q1.left - q2.left);
+        const home = c.hasAttribute("data-floor-home");
+        let cut = b.left;
+        const push = (from: number, to: number) => {
+          if (to - from < 70) return;                     // too narrow to stand on
+          out.push({ x1: (from - r.left) * sx, x2: (to - r.left) * sx,
+                     y: (edge - r.top) * sy, home });
+        };
+        for (const q of blockers) { push(cut, q.left - 4); cut = Math.max(cut, q.right + 4); }
+        push(cut, b.right);
       }
       return out;
     };
