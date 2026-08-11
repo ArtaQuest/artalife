@@ -48,7 +48,11 @@ CX, CY = W / 2, H / 2
 GROUND = 640.0
 DUR = 47.5
 FPS_FIG, FPS_SMOOTH = 24, 24
-STRIDE = 110.0          # px per stride; sets the walk cadence for any distance
+STRIDE = 150.0          # px per stride; sets the walk cadence for any distance.
+                        # 110 gave a 1.06 leg-length stride — a correct cycle at a
+                        # sprint's tempo, the classic wrong-frame-rate read. 150 is
+                        # 1.44, which is what a person does, and it is the same
+                        # number the live rig uses: one skeleton, one gait.
 
 # Glyph slots along the equation, at 160 apart rather than 140: the figure has
 # to stand SOMEWHERE, and at 140 every rest position overlapped a glyph and the
@@ -231,12 +235,60 @@ def blend(p, q, u):
 def P_stand(x, face=1):
     return pose((x, HIP_Y), face=face)
 
+# ── the walk: the foot path is authored, the joints are SOLVED ──────────────
+# This was two sinusoids in antiphase with the root advancing at a constant
+# speed, and nothing tied the two together — so through what should have been a
+# leg's stance the foot slid across the ground and the figure glided instead of
+# walking. It is the single most common tell of an amateur walk cycle, and the
+# live rig carried the identical formula until it was measured.
+#
+# Same fix here, and it has to BE the same: the film and the improvising figure
+# share one skeleton, and a walk that differs between them is two mascots.
+W_STANCE = 0.54     # fraction of the cycle a foot is planted; the overlap above
+                    # 0.5 is double support, which is what makes it a walk
+W_REACH  = 103.0    # hip→foot reach held constant through stance, so the hip
+                    # rides an arc over the planted foot (the compass gait)
+W_LIFT   = 16.0     # swing-foot ground clearance
+W_DIP    = 3.5      # midstance knee flexion, flattening the compass arc
+
+def leg_ik(tx, ty):
+    """Two-link IK. Target is hip-relative (x right, y down). Knee leads
+    forward, which is how a knee bends and how the rest of the library poses."""
+    d = min(math.hypot(tx, ty), THIGH + SHIN - 0.5)
+    knee = math.acos(max(-1.0, min(1.0, (THIGH * THIGH + SHIN * SHIN - d * d) / (2 * THIGH * SHIN))))
+    lead = math.acos(max(-1.0, min(1.0, (d * d + THIGH * THIGH - SHIN * SHIN) / (2 * d * THIGH))))
+    return (math.degrees(math.atan2(tx, ty) + lead), math.degrees(knee) - 180.0)
+
+def _foot(p):
+    """Where one foot is at leg-phase p: ground x relative to the root, and its
+    height above the ground. Phase 0 is heel strike."""
+    run = W_STANCE * STRIDE
+    if p < W_STANCE:
+        # planted: it does not move in the world, so relative to the advancing
+        # root it slides straight back at exactly the root's speed
+        return run * (0.5 - p / W_STANCE), 0.0
+    u = (p - W_STANCE) / (1.0 - W_STANCE)
+    # end slopes MATCH the stance velocity, so the foot is still travelling
+    # backwards as it leaves the ground and again as it lands; anything else
+    # changes its velocity in a single drawing and whips the knee
+    m = -(1.0 - W_STANCE) / W_STANCE
+    gx = m * (2 * u ** 3 - 3 * u ** 2 + u) + (3 * u ** 2 - 2 * u ** 3)
+    return run * (gx - 0.5), W_LIFT * math.sin(math.pi * u) ** 2
+
 def P_walk(x, ph, face=1):
-    th = 2 * math.pi * ph
-    return pose((x, HIP_Y - 2 + 3.0 * abs(math.cos(th))), face=face, lean=7,
-                la=(-20 * math.sin(th), 16), ra=(20 * math.sin(th), 16),
-                ll=(26 * math.sin(th), -16 - 16 * max(0, math.cos(th))),
-                rl=(-26 * math.sin(th), -16 - 16 * max(0, -math.cos(th))))
+    l_dx, l_lift = _foot(ph % 1.0)
+    r_dx, r_lift = _foot((ph + 0.5) % 1.0)
+    half = (W_STANCE * STRIDE) / 2.0
+    def cap(dx, lift):
+        # a raised foot relaxes its own constraint by exactly its lift, so no
+        # set membership is needed and the hip height never steps
+        return lift + math.sqrt(max(1.0, W_REACH ** 2 - dx * dx)) \
+               - W_DIP * max(0.0, 1.0 - (dx / half) ** 2)
+    h = min(cap(l_dx, l_lift), cap(r_dx, r_lift))
+    sway = 20.0 * math.cos(2 * math.pi * ph)      # arms oppose the legs
+    return pose((x, GROUND - h), face=face, lean=7,
+                la=(-sway, 14), ra=(sway, 14),
+                ll=leg_ik(l_dx, h - l_lift), rl=leg_ik(r_dx, h - r_lift))
 
 def P_reach(x, face=1, k=1.0):
     return pose((x, HIP_Y - 1), face=face, lean=10 * k, tilt=6 * k,
@@ -992,7 +1044,11 @@ def lint():
             d = max((abs(x - y) for x, y in zip(a, b_)), default=0.0)
             if d > pk:
                 pk, pi = d, i
-        worst.append((pk, tag.split("/")[-1], pi / fps, tag))
+        # Keep the two drawings either side of the worst jump. A magnitude tells
+        # you a cut exists; the values tell you WHICH prop and where it went, and
+        # without that the only way to act on this table is to guess.
+        ev = (vals[pi - 1], vals[pi]) if 0 < pi < len(vals) else ("", "")
+        worst.append((pk, tag.split("/")[-1], pi / fps, tag, ev))
     worst.sort(reverse=True)
     # The same motion-safety law the live rig enforces, converted to this film's
     # cadence. ARTA.md caps continuous motion at MAX_PX_PER_SEC = 640 world
@@ -1009,8 +1065,10 @@ def lint():
     budget = 640.0 / 12.0
     over = [w for w in worst if w[0] > budget]
     print(f"  worst per-frame jumps (units/frame; budget {budget:.0f} = 640/s at 12 drawings/s):")
-    for k, short, at, tag in worst[:9]:
+    for k, short, at, tag, ev in worst[:9]:
         print(f"    {'OVER' if k > budget else '  ok'} {k:8.1f}  t={at:5.2f}s  {short:16s} {tag[-42:]}")
+        if k > budget:
+            print(f"           {ev[0]}  ->  {ev[1]}")
     if over:
         print(f"  {len(over)} track(s) exceed the per-drawing budget — a jump this size reads as a cut.")
     else:
