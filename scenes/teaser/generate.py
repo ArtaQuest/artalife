@@ -137,10 +137,10 @@ def P_stand(x):
 def P_aim(x, face=1, k=1.0, up=0.0):
     """The signature gesture: Arta points at what matters. `k` eases the arm out
     of a stand, `up` swings the aim from horizontal to up-forward."""
-    lead = lerp(88.0, 150.0, up)
+    lead = lerp(88.0, 137.0, up)
     return U.pose((x, U.HIP_Y - 1),
-                  lean=lerp(0.0, 4.0 - 8.0 * up, k),
-                  tilt=lerp(0.0, -6.0 - 10.0 * up, k),
+                  lean=lerp(0.0, 4.0 - 20.0 * up, k),
+                  tilt=lerp(0.0, -6.0 - 22.0 * up, k),
                   face=face,
                   la=(lerp(9, lead, k), lerp(12, 4, k)),
                   ra=(lerp(-9, -46, k), lerp(-12, -34, k)),
@@ -173,7 +173,11 @@ def facing(t):
 
 
 def figure(t):
-    """Arta's pose at time t, on twos."""
+    """Arta's pose at time t.
+
+    The quantiser is an exact no-op while FIG_HZ equals FPS, which is the point: it is the single
+    line that would put the figure back on the published film's cadence, and leaving it in place
+    keeps the two mediums one edit apart rather than one rewrite."""
     t = math.floor(t * FIG_HZ) / FIG_HZ
     f = facing(t)
     face = 1 if f >= 0 else -1
@@ -386,7 +390,9 @@ def frame(t):
     fy, fl = F("m700", BRAND_YEAR_PX), F("i500", BRAND_LABEL_PX)
     draw_rail(d, "l", t, fy, fl)
     draw_rail(d, "r", t, fy, fl)
-    if t < B["hold_up"] + 0.6:
+    # Drawn until the end card has fully covered it: cutting the figure DURING the dissolve
+    # pops, because the frame under a partly-transparent overlay is still visible.
+    if t < B["hold_up"] + 0.9:
         draw_arta(d, figure(t))
     if t >= B["hold_up"]:
         # The sign-off: the wordmark and the handle, nothing else. It fades up over the finished
@@ -432,6 +438,33 @@ def max_step():
     return worst, at
 
 
+HEAD_R_PX = U.HEAD_R * SCALE
+
+
+def head_clearance():
+    """How close any limb's centre-line comes to the head centre, over the whole film.
+
+    A stick figure has no face, so the head is the one shape that must stay legible; a limb drawn
+    across it reads as a broken drawing. The aim-up pose crossed it by 2.2 px and nothing measured
+    that, because the selftest only ever looked at speed and at the ground."""
+    worst = (1e9, 0.0)
+    for n in range(int(DUR * FPS)):
+        t = n / FPS
+        s = skeleton_points(figure(t))
+        c = s["head"]
+        for chain in ([s["neck"], *s["arms"][0]], [s["neck"], *s["arms"][1]],
+                      [s["hip"], *s["legs"][0]], [s["hip"], *s["legs"][1]]):
+            for i in range(len(chain) - 1):
+                a, b = chain[i], chain[i + 1]
+                dx, dy = b[0] - a[0], b[1] - a[1]
+                L = dx * dx + dy * dy or 1e-9
+                u = max(0.0, min(1.0, ((c[0] - a[0]) * dx + (c[1] - a[1]) * dy) / L))
+                d = math.hypot(a[0] + u * dx - c[0], a[1] + u * dy - c[1])
+                if d < worst[0]:
+                    worst = (d, t)
+    return worst
+
+
 def main():
     args = sys.argv[1:]
     if "--check" in args:
@@ -445,6 +478,12 @@ def main():
               f"{max(l[1][1] for l in s['legs']):.0f} (ground {GROUND:.0f})")
         assert worst <= budget * 1.02, f"motion-safety exceeded: {worst:.2f} px > {budget:.1f}"
         assert abs(max(l[1][1] for l in s["legs"]) - GROUND) < 6, "Arta is not standing on the ground"
+        worst_head = head_clearance()
+        print(f"closest a limb comes to the head centre: {worst_head[0]:.1f} px at t={worst_head[1]:.2f}s "
+              f"(head radius {HEAD_R_PX:.1f})")
+        assert worst_head[0] >= HEAD_R_PX, (
+            f"a limb crosses the head at t={worst_head[1]:.2f}s: {worst_head[0]:.1f} px from the centre "
+            f"against a {HEAD_R_PX:.1f} px radius")
         print("selftest: PASS")
         return
     out = HERE / "frames"
