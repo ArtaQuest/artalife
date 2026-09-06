@@ -71,6 +71,7 @@ INK, INK2, INK3 = (244, 244, 245), (166, 168, 176), (139, 142, 152)
 TL_L_X, TL_R_X, TL_W = 32, 1312, 576
 TL_TOP, PITCH = 613, 64
 RAIL_DX, RAIL_W, TICK_W, TICK_H, CUR_W = 9, 6, 24, 6, 34
+BRAND_YEAR_PX, BRAND_LABEL_PX = 32, 28
 
 # What the two rails say. No name, no date of birth, no birthplace: the teaser
 # shows the SHAPE of two lives that meet and keep going, not a claim about a
@@ -80,9 +81,8 @@ ROWS_L = [("1979", "Married"), ("1985", "Master baker"), ("1998", "Opened the ba
 ROWS_R = [("1979", "Married"), ("1984", "Nursing degree"), ("1996", "Head nurse"),
           ("2007", "Founded the clinic"), ("2026", "47 years together")]
 
-LINES = ["Every marriage that lasts",
-         "is a story someone can tell",
-         "Happily married couples on how they stay together"]
+# No narrative copy: the timeline carries the film. The only words are the years and milestones
+# on the rails, and the handle at the end.
 HANDLE = "youtube.com/@ArtaQuest"
 
 # ── the beat clock ──────────────────────────────────────────────────────────
@@ -324,57 +324,87 @@ def fonts():
 FONT_FILES = fonts()
 
 
+SS = 3               # supersample factor: draw at 3x, resample down with LANCZOS
+
+
 def F(key, px):
+    """A font at DRAWING size — every caller works in frame units and the pen scales."""
     if key in FONT_FILES:
-        return ImageFont.truetype(FONT_FILES[key], px)
+        return ImageFont.truetype(FONT_FILES[key], int(round(px * SS)))
     return ImageFont.load_default()
 
 
-def draw_plate(d, text, px, x, bottom, alpha_img=None):
-    """One line on the show's own lower-third: a 10 px blue bar, then a black
-    80 % plate that hugs its text."""
-    f = F("m700", px)
-    box = d.textbbox((0, 0), text, font=f)
-    pad_l, pad_r, pad_t, pad_b = 20, 24, 10, 10
-    ph = pad_t + int(px * 1.06) + pad_b
-    pw = pad_l + (box[2] - box[0]) + pad_r
-    top = bottom - ph
-    d.rectangle([x, top, x + 9, bottom - 1], fill=BLUE)
-    d.rectangle([x + 10, top, x + 10 + pw - 1, bottom - 1], fill=(0, 0, 0))
-    d.text((x + 10 + pad_l - box[0], top + pad_t - box[1] + int(px * 0.06)), text,
-           font=f, fill=INK)
+class Pen:
+    """ImageDraw in frame coordinates, drawing into an SS-times-larger canvas.
+
+    PIL will not anti-alias a line or an ellipse: it fills whole pixels, so a limb at any angle but
+    0 or 45 degrees is a staircase and a 6 px rail tick has hard corners. Supersampling is the fix,
+    and putting it behind a pen keeps every coordinate in this file honest — the geometry stays in
+    the frame units the kit's spec is written in, and only the pen knows about SS."""
+
+    def __init__(self, d, s=SS):
+        self.d, self.s = d, s
+
+    def _p(self, pts):
+        return [(x * self.s, y * self.s) for x, y in pts]
+
+    def line(self, pts, fill=None, width=1, joint=None):
+        self.d.line(self._p(pts), fill=fill, width=max(1, int(round(width * self.s))), joint=joint)
+
+    def rectangle(self, box, fill=None):
+        x0, y0, x1, y1 = box
+        # +1 on the far edge: a rectangle in pixel coordinates is inclusive, so scaling the
+        # corners alone would shrink every bar by SS-1 subpixels and thin the rails.
+        self.d.rectangle([x0 * self.s, y0 * self.s,
+                          (x1 + 1) * self.s - 1, (y1 + 1) * self.s - 1], fill=fill)
+
+    def ellipse(self, box, outline=None, width=1):
+        x0, y0, x1, y1 = box
+        self.d.ellipse([x0 * self.s, y0 * self.s, x1 * self.s, y1 * self.s],
+                       outline=outline, width=max(1, int(round(width * self.s))))
+
+    def text(self, xy, txt, font=None, fill=None):
+        self.d.text((xy[0] * self.s, xy[1] * self.s), txt, font=font, fill=fill)
+
+    def textlength(self, txt, font=None):
+        return self.d.textlength(txt, font=font) / self.s
+
+    def textbbox(self, xy, txt, font=None):
+        b = self.d.textbbox((xy[0] * self.s, xy[1] * self.s), txt, font=font)
+        return tuple(v / self.s for v in b)
 
 
 def frame(t):
-    img = Image.new("RGB", (W, H), BG)
-    d = ImageDraw.Draw(img)
-    fy, fl = F("m700", 32), F("i500", 28)
+    """One frame, drawn at SS times the size and resampled down.
+
+    There is no narrative copy on it. The timeline is the story — two lives that begin apart, meet
+    in the same year and keep going — and a line of type over it would say the same thing worse.
+    The only words are the years and the milestones on the rails, which ARE the timeline, and the
+    name at the end."""
+    big = Image.new("RGB", (W * SS, H * SS), BG)
+    d = Pen(ImageDraw.Draw(big))
+    fy, fl = F("m700", BRAND_YEAR_PX), F("i500", BRAND_LABEL_PX)
     draw_rail(d, "l", t, fy, fl)
     draw_rail(d, "r", t, fy, fl)
     if t < B["hold_up"] + 0.6:
         draw_arta(d, figure(t))
-    # the lines, each fading in on its beat and out with its side
-    for i, (t0, t1) in enumerate(((B["aim_l"] + 0.2, B["turn_r"] - 0.2),
-                                  (B["aim_r"] + 0.2, B["to_mid"] + 0.2))):
-        if t0 <= t <= t1:
-            draw_plate(d, LINES[i], 60, 32, 1030)
     if t >= B["hold_up"]:
-        u = ease(seg(t, B["hold_up"], B["hold_up"] + 0.8))
-        ov = Image.new("RGB", (W, H), BG)
-        od = ImageDraw.Draw(ov)
-        fw, fh, fs = F("m800", 120), F("i500", 44), F("i600", 40)
+        # The sign-off: the wordmark and the handle, nothing else. It fades up over the finished
+        # rails rather than cutting, so the last thing on screen is still the two lives.
+        u = ease(seg(t, B["hold_up"], B["hold_up"] + 0.9))
+        ov = Image.new("RGB", (W * SS, H * SS), BG)
+        od = Pen(ImageDraw.Draw(ov))
+        fw, fh = F("m800", 120), F("i500", 44)
         wa = od.textlength("Arta", font=fw)
         wq = od.textlength("Quest", font=fw)
         tx = (W - (wa + wq)) / 2
-        ty = H / 2 - 150
+        ty = H / 2 - 96
         od.text((tx, ty), "Arta", font=fw, fill=GOLD)
         od.text((tx + wa, ty), "Quest", font=fw, fill=BLUE)
-        sw = od.textlength(LINES[2], font=fs)
-        od.text(((W - sw) / 2, ty + 190), LINES[2], font=fs, fill=INK2)
         hw = od.textlength(HANDLE, font=fh)
-        od.text(((W - hw) / 2, ty + 258), HANDLE, font=fh, fill=INK3)
-        img = Image.blend(img, ov, u)
-    return img
+        od.text(((W - hw) / 2, ty + 190), HANDLE, font=fh, fill=INK3)
+        big = Image.blend(big, ov, u)
+    return big.resize((W, H), Image.LANCZOS)
 
 
 # ── the motion-safety ceiling, measured rather than trusted ─────────────────
