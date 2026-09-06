@@ -35,8 +35,18 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent / "undefined"))
-import generate as U   # noqa: E402  — the rig of record
+
+# THE RIG, LOADED BY PATH RATHER THAN BY NAME. `import generate` looks wrong only when it works:
+# the sibling scene's file is also called generate.py, so once anything imports THIS file as
+# `generate` — which a notebook does — `import generate` returns this module and the rig resolves
+# to itself. It ran perfectly as a script and died on Kaggle at the first joint. A path and a
+# unique module name cannot be shadowed.
+import importlib.util   # noqa: E402
+_rig = HERE.parent / "undefined" / "generate.py"
+_spec = importlib.util.spec_from_file_location("arta_rig", _rig)
+U = importlib.util.module_from_spec(_spec)
+sys.modules["arta_rig"] = U
+_spec.loader.exec_module(U)   # the rig of record: same skeleton, same walk, same law
 
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
