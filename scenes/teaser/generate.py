@@ -51,7 +51,8 @@ _spec.loader.exec_module(U)   # the rig of record: same skeleton, same walk, sam
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
 # ── the canvas, and the show's numbers ──────────────────────────────────────
-W, H, FPS, DUR = 1920, 1080, 24, 22.0
+W, H, FPS, DUR = 1920, 1080, 24, 20.0
+FADE = 1.2                       # the closing fade, on the finished timeline
 FIG_HZ = 24                      # EVERY FRAME. ARTA.md §4 holds the film on twos and the
                                  # mascot smooth, and says both are right for their medium.
                                  # This is watched as video, which is the mascot's medium:
@@ -81,18 +82,17 @@ ROWS_L = [("1979", "Married"), ("1985", "Master baker"), ("1998", "Opened the ba
 ROWS_R = [("1979", "Married"), ("1984", "Nursing degree"), ("1996", "Head nurse"),
           ("2007", "Founded the clinic"), ("2026", "47 years together")]
 
-# No narrative copy: the timeline carries the film. The only words are the years and milestones
-# on the rails, and the handle at the end.
-HANDLE = "youtube.com/@ArtaQuest"
+# No copy of any kind: the timeline carries the film, and it ends on the timeline rather than on a
+# name. The only words in the whole film are the years and milestones on the two rails.
 
 # ── the beat clock ──────────────────────────────────────────────────────────
-# Arta walks in, aims left, aims right, walks to the middle and aims up. Five
-# beats in twenty-two seconds is slow on purpose: the show is about people who
+# Arta walks in, aims left, aims right, and raises the aim over the finished timeline. Four beats
+# in twenty seconds is slow on purpose: the show is about people who
 # did the same thing for forty years, and a teaser that hurries argues against it.
 B = dict(walk_in=0.0, arrive=2.8, settle=3.4,
          turn_l=3.4, aim_l=4.2, rows_l=5.0, drop_l=8.3,
          turn_r=9.0, aim_r=9.8, rows_r=10.6, drop_r=13.9,
-         to_mid=14.6, mid=16.0, aim_up=16.4, hold_up=18.0, end=22.0)
+         to_mid=14.6, mid=16.0, aim_up=16.2, hold_up=17.4, end=20.0)
 ROW_EVERY = 0.8
 
 # Arta walks in once and then holds its ground: aiming left and aiming right happen
@@ -381,48 +381,31 @@ class Pen:
 def frame(t):
     """One frame, drawn at SS times the size and resampled down.
 
-    There is no narrative copy on it. The timeline is the story — two lives that begin apart, meet
-    in the same year and keep going — and a line of type over it would say the same thing worse.
-    The only words are the years and the milestones on the rails, which ARE the timeline, and the
-    name at the end."""
+    THERE IS NO TYPE ON IT BUT THE TIMELINE'S OWN. No lines of copy, and no end card: the film ends
+    on the finished timeline rather than on a name. The only words are the years and the milestones
+    on the two rails, which ARE the timeline — take those away and the rails are decoration."""
     big = Image.new("RGB", (W * SS, H * SS), BG)
     d = Pen(ImageDraw.Draw(big))
     fy, fl = F("m700", BRAND_YEAR_PX), F("i500", BRAND_LABEL_PX)
     draw_rail(d, "l", t, fy, fl)
     draw_rail(d, "r", t, fy, fl)
-    # Drawn until the end card has fully covered it: cutting the figure DURING the dissolve
-    # pops, because the frame under a partly-transparent overlay is still visible.
-    if t < B["hold_up"] + 0.9:
-        draw_arta(d, figure(t))
-    if t >= B["hold_up"]:
-        # The sign-off: the wordmark and the handle, nothing else. It fades up over the finished
-        # rails rather than cutting, so the last thing on screen is still the two lives.
-        u = ease(seg(t, B["hold_up"], B["hold_up"] + 0.9))
-        ov = Image.new("RGB", (W * SS, H * SS), BG)
-        od = Pen(ImageDraw.Draw(ov))
-        fw, fh = F("m800", 120), F("i500", 44)
-        wa = od.textlength("Arta", font=fw)
-        wq = od.textlength("Quest", font=fw)
-        tx = (W - (wa + wq)) / 2
-        ty = H / 2 - 96
-        od.text((tx, ty), "Arta", font=fw, fill=GOLD)
-        od.text((tx + wa, ty), "Quest", font=fw, fill=BLUE)
-        hw = od.textlength(HANDLE, font=fh)
-        od.text(((W - hw) / 2, ty + 190), HANDLE, font=fh, fill=INK3)
-        big = Image.blend(big, ov, u)
-    return big.resize((W, H), Image.LANCZOS)
+    draw_arta(d, figure(t))
+    img = big.resize((W, H), Image.LANCZOS)
+    # The last beat is a fade on the finished timeline: both rails complete, Arta standing between
+    # them. Ending on a held drawing rather than a card is the point of dropping the card.
+    if t > DUR - FADE:
+        u = ease(seg(t, DUR - FADE, DUR))
+        img = Image.blend(img, Image.new("RGB", (W, H), BG), u)
+    return img
 
 
 # ── the motion-safety ceiling, measured rather than trusted ─────────────────
 def max_step():
     """The largest single-point displacement between consecutive drawings, in px.
 
-    The law is ARTA.md §3, converted to this film's cadence exactly as the
-    published scene's own lint converts it: continuous motion is capped at
-    640 units a second, so a new drawing every 1/FIG_HZ s may travel 640/FIG_HZ
-    units — 53 on twos, 27 at every frame. The other ceiling — 12 px in a frame — is an
-    anti-strobe rule for 60 Hz-class motion and does not transfer to a film on
-    twos; asserting it here failed a perfectly good walk. Units are this
+    The law is ARTA.md §3, converted to this film's cadence exactly as the published scene's own
+    lint converts it: continuous motion is capped at 640 units a second, so a new drawing every
+    1/FIG_HZ s may travel 640/FIG_HZ units — 53 on twos, 27 at every frame. Units are this
     composition's own, so the film's 1600-wide canvas scales to our 1920."""
     prev, worst, at = None, 0.0, 0.0
     for i in range(int(DUR * FIG_HZ)):
