@@ -52,7 +52,11 @@ from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
 # ── the canvas, and the show's numbers ──────────────────────────────────────
 W, H, FPS, DUR = 1920, 1080, 24, 22.0
-FIG_HZ = 12                      # the figure holds on twos; props and type run at 24
+FIG_HZ = 24                      # EVERY FRAME. ARTA.md §4 holds the film on twos and the
+                                 # mascot smooth, and says both are right for their medium.
+                                 # This is watched as video, which is the mascot's medium:
+                                 # a held drawing that reads as "drawn" in an SVG scene reads
+                                 # as a dropped frame in an MP4.
 GROUND = 985.0                   # the episode frame's host window ends here
 SCALE = 1.39                     # Arta stands 300 px tall in a 1080 frame
 STROKE = 11                      # 8 rig units at this scale — the film's own line
@@ -214,14 +218,44 @@ def skeleton_points(p):
                 head_r=U.HEAD_R * SCALE)
 
 
+FILLET = 16.0        # px of bend at an elbow or a knee
+
+
+def _fillet(pts, r=FILLET, steps=9):
+    """A limb as a smooth chain: straight into the joint, a quadratic through it, straight out.
+
+    PIL's round line-join rounds the OUTSIDE of a corner by the stroke width and nothing more, so
+    an elbow stays a hard angle however wide the line is. Bending the limb itself is what makes a
+    joint read as a joint, and it is the difference the operator saw as "broken"."""
+    out = [pts[0]]
+    for i in range(1, len(pts) - 1):
+        a, b, c = pts[i - 1], pts[i], pts[i + 1]
+        v1 = (a[0] - b[0], a[1] - b[1])
+        v2 = (c[0] - b[0], c[1] - b[1])
+        n1 = math.hypot(*v1) or 1.0
+        n2 = math.hypot(*v2) or 1.0
+        r1, r2 = min(r, n1 / 2), min(r, n2 / 2)
+        p1 = (b[0] + v1[0] / n1 * r1, b[1] + v1[1] / n1 * r1)
+        p2 = (b[0] + v2[0] / n2 * r2, b[1] + v2[1] / n2 * r2)
+        out.append(p1)
+        for k in range(1, steps):
+            u = k / steps
+            w = (1 - u) ** 2
+            out.append((w * p1[0] + 2 * (1 - u) * u * b[0] + u * u * p2[0],
+                        w * p1[1] + 2 * (1 - u) * u * b[1] + u * u * p2[1]))
+        out.append(p2)
+    out.append(pts[-1])
+    return out
+
+
 def draw_arta(d, p):
     s = skeleton_points(p)
     kw = dict(fill=GOLD, width=STROKE, joint="curve")
-    d.line([s["hip"], s["neck"]], **kw)
+    d.line(_fillet([s["hip"], s["neck"]]), **kw)
     for a in s["arms"]:
-        d.line([s["neck"], a[0], a[1]], **kw)
+        d.line(_fillet([s["neck"], a[0], a[1]]), **kw)
     for l in s["legs"]:
-        d.line([s["hip"], l[0], l[1]], **kw)
+        d.line(_fillet([s["hip"], l[0], l[1]]), **kw)
     r = s["head_r"]
     d.ellipse([s["head"][0] - r, s["head"][1] - r, s["head"][0] + r, s["head"][1] + r],
               outline=GOLD, width=STROKE)
@@ -349,8 +383,8 @@ def max_step():
 
     The law is ARTA.md §3, converted to this film's cadence exactly as the
     published scene's own lint converts it: continuous motion is capped at
-    640 units a second, the figure holds on twos, so a new drawing every 1/12 s
-    may travel 640/12 = 53 units. The other ceiling — 12 px in a frame — is an
+    640 units a second, so a new drawing every 1/FIG_HZ s may travel 640/FIG_HZ
+    units — 53 on twos, 27 at every frame. The other ceiling — 12 px in a frame — is an
     anti-strobe rule for 60 Hz-class motion and does not transfer to a film on
     twos; asserting it here failed a perfectly good walk. Units are this
     composition's own, so the film's 1600-wide canvas scales to our 1920."""
@@ -373,7 +407,7 @@ def main():
     if "--check" in args:
         worst, at = max_step()
         budget = (640.0 / FIG_HZ) * (W / 1600.0)
-        print(f"figure: {int(DUR*FIG_HZ)} drawings on twos · largest step {worst:.2f} px "
+        print(f"figure: {int(DUR*FIG_HZ)} drawings at {FIG_HZ} Hz · largest step {worst:.2f} px "
               f"at t={at:.2f}s · budget {budget:.0f} px (640/s at {FIG_HZ} drawings/s, "
               f"scaled to a {W}-wide frame)")
         s = skeleton_points(figure(2.6))
