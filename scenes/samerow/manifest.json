@@ -1,0 +1,35 @@
+{
+  "file": "/Users/arash/Downloads/artaquest/artaquest-teaser/ArtaQuest_teaser_v2.mp4",
+  "sha256": "f1a9f84d9136049247f9bd1a4ac619f7b5f5be3f029cf73620837e82fd08c40c",
+  "bytes": 2736676,
+  "duration_s": 16.0,
+  "frames": 384,
+  "size": "1920x1080",
+  "fps": "24/1",
+  "audio": {
+    "source": "/Users/arash/Downloads/artaquest/artaquest-teaser/teaser_music.wav",
+    "integrated_lufs": -13.94,
+    "true_peak_dbtp": -3.97,
+    "lra": 7.6,
+    "fade_in_s": 1.2,
+    "fade_out_s": 2.4
+  },
+  "motion": {
+    "law": "ARTA.md \u00a73: no drawn point of the figure moves more than min(640 px/s\u00b7dt, 12 px) per frame, in frame px, camera included",
+    "budget_px": 12.0,
+    "peak_px": 11.753,
+    "peak_frame": 58,
+    "governed_frames": 0
+  },
+  "head_gate": {
+    "rule": "no limb sample inside the ring's outer edge (r + stroke/2 = 24 units), samples within 13 units of the neck excluded"
+  },
+  "exceptions": {
+    "arrow": "a tool, not a drawn point of the figure: 50 world px/frame against a 100 px shaft, so consecutive drawings overlap by half",
+    "windows": "slabs with mass: ease-in 0.55 s, 8 px overshoot, 0.18 s settle \u2014 no per-frame ceiling applies"
+  },
+  "sample_data": "fictional (the kit's own Main sample); no photographic or generated people; the seats are empty",
+  "lower_thirds": true,
+  "scale": 1.73,
+  "stroke_units": 8.0
+}
