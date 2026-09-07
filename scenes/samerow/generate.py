@@ -47,10 +47,28 @@ ROOT = HERE.parent.parent
 _spec = importlib.util.spec_from_file_location("arta_rig", ROOT / "scenes" / "undefined" / "generate.py")
 rig = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(rig)
-skeleton, lerp, seg, ease = rig.skeleton, rig.lerp, rig.seg, rig.ease
+lerp, seg, ease = rig.lerp, rig.seg, rig.ease
 SPINE, NECK_H, HEAD_R = rig.SPINE, rig.NECK_H, rig.HEAD_R
 THIGH, SHIN, UARM, LARM = rig.THIGH, rig.SHIN, rig.UARM, rig.LARM
 assert (SPINE, NECK_H, HEAD_R, THIGH, SHIN, UARM, LARM) == (70, 24, 20, 52, 52, 34, 32)
+
+SHOULDER_DROP = 7.0                           # rig units down the spine from the neck: where the arms are DRAWN from
+
+def skeleton(p):
+    """The rig's skeleton, with the arms re-rooted at a shoulder SHOULDER_DROP units down the
+    spine. The rig roots them at the neck, which is also where the head ring's outer edge sits
+    (NECK_H 24 = r20 + stroke/2): a horizontal pointing arm then puts its 8-unit stroke through
+    the ring's bottom arc and the ring reads as sitting on a bar (reviewer 1, defect 3). Seven
+    units down, a horizontal arm's top edge clears the ring by 3 units. Angles, lengths and the
+    joint convention are untouched; only the root moves."""
+    s = rig.skeleton(p)
+    nx, ny = s["neck"]
+    k = 1.0 - SHOULDER_DROP / math.hypot(nx, ny)
+    sh = (nx * k, ny * k)
+    f = p["face"]
+    s["shoulder"] = sh
+    s["arms"] = [rig._limb(sh, a[0] * f, a[1] * f, UARM, LARM) for a in (p["la"], p["ra"])]
+    return s
 
 # ── frame, clock, palette ───────────────────────────────────────────────────
 W, H, FPS, DUR = 1920, 1080, 24, 16.0
@@ -61,18 +79,23 @@ BG, SPACE3 = "#010C17", "#0C1E32"
 INK, INK2, INK3 = "#F4F4F5", "#A6A8B0", "#8B8E98"
 
 # ── the figure ──────────────────────────────────────────────────────────────
-SCALE = 1.73                                  # rig units -> world px: 218 * 1.73 = 377 px, 35 % of 1080
+SCALE = 1.58                                  # rig units -> world px: 218 * 1.58 = 344 px; ring top at 641, INSIDE the host window (top 625)
 STROKE = 8.0                                  # rig units, like the film's .fig
 RING = HEAD_R + STROKE / 2                    # the head ring's OUTER edge, 24 units
 SHOULDER_EXCL = 13.0                          # within this of the neck a limb sample is a shoulder
 SHOULDER_MAX = 116                            # arta.ts point(): past this the arm folds at the elbow
 ARTA_X, GROUND = 960.0, 985.0                 # the host window's bottom edge; Arta never leaves it
 MAX_PX_PER_FRAME = min(640.0 * DT, 12.0)      # ARTA.md §3 at 24 fps: 12 px, no re-derivation
-ARROW_SPEED, ARROW_SHAFT = 1200.0, 100.0      # world px/s, world px: 50 px/frame, half the shaft
+ARROW_SPEED, ARROW_SHAFT = 1200.0, 120.0      # world px/s, world px: 50 px/frame against a 120 px shaft
+ARROW_STROKE, ARROW_BARB, ARROW_STICK = 6.0, (22.0, 13.0), 0.20   # rig units; world px (along, across); s it rests on the tick
+HAIR_X0, HAIR_X1 = 560.0, 1360.0              # the hairline is a floor mark under Arta, soft-ended; it never runs under a rail
+FALL, SETTLE, OVERSHOOT = 0.9, 0.15, 8.0      # a slab with mass: gravity (u^2) for FALL s, OVERSHOOT px past the seat, SETTLE s back
 
 # ── the show's frame (final/Main.dc.html, Spec.dc.html §3 and §10) ──────────
 WIN_MAN, WIN_WOMAN, WIN_HOST = (32, 18, 912, 513), (976, 18, 912, 513), (640, 625, 640, 360)
 WIN_R = 16
+WINDOWS = dict(cm=(WIN_MAN, 'win_man', -560.0, FALL), cw=(WIN_WOMAN, 'win_woman', -560.0, FALL),
+               ch=(WIN_HOST, 'win_host', 150.0, 0.8))   # (rect, beat, start y, fall s); the host drops from BEHIND the couple
 TL_TOP, PITCH = 613, 64                       # row tops 613 … 933; tick centres 645 … 965
 TL_L_X, TL_R_X, TL_W = 32, 1312, 576
 RAIL_INSET, RAIL_W, TICK_W, CURSOR_W, TICK_H = 9, 6, 24, 34, 6
@@ -91,24 +114,24 @@ RAIL_TOP, RAIL_BOT = tick_cy(0), tick_cy(5)   # 645, 965
 
 # ── the beat clock (seconds) ────────────────────────────────────────────────
 B = dict(
-    fire_l=0.60,                              # the arrow leaves the hand
-    arm_down_l=1.60, arm_down_l_end=3.20,
-    turn=3.20, turn_end=4.45,                 # face -1 -> +1 between two held stands
-    pan=4.10, pan_end=7.70,                   # camera A -> B
-    aim_r=4.50, aim_r_end=6.05,
-    fire_r=6.10,
-    arm_down_r=7.10, arm_down_r_end=8.75,
-    pull=8.90, pull_end=11.10,                # camera B -> C
-    win_man=9.70, win_woman=9.95,             # the couple's windows fall
-    vig_off=9.40, vig_off_end=10.60,
-    flinch=10.85,                             # 0.35 s after the second landing settles: noticing
-    gold=11.50,                               # THE SAME ROW
-    nod=11.90,
-    win_host=12.90,
-    think=13.50, think_end=14.90,
-    fade=15.20, end=16.00,
+    aim_l=0.10, aim_l_end=1.70,               # the arm RISES from a stand: the film opens on a draw, not a held point
+    fire_l=1.75,                              # the arrow leaves the hand; lands ~2.41
+    turn=3.00, turn_end=4.60,                 # face -1 -> +1 AND the arm comes down: one motivated move, not a hold + a mirror
+    pan=4.75, pan_end=8.25,                   # camera A -> B; his list fades as the frame edge reaches it (never sliced)
+    aim_r=6.00, aim_r_end=7.60,
+    fire_r=7.65,                              # lands ~8.31, on a B that has the mark 81 px inside the edge
+    arm_down_r=8.55, arm_down_r_end=10.05,
+    pull=9.90, pull_end=12.20,                # camera B -> C
+    win_man=10.60, win_woman=10.85,           # the couple's windows fall (0.9 s), settle by 11.65 / 11.90
+    vig_off=10.30, vig_off_end=11.50,
+    flinch=12.05,                             # just after the second landing settles: noticing
+    gold=12.35,                               # THE SAME ROW
+    nod=12.75, nod_end=13.35,                 # one nod, ending on zero as the think begins
+    win_host=13.05,                           # emerges from behind the couple, lands 13.85, settles 14.00
+    think=13.35, think_mid=13.75, think_end=14.75,   # stand -> fold (elbow bent, forearm hanging) -> forearm up to the chin
+    fade=15.75, end=16.00,                    # the payoff holds 1.0 s at full brightness, then a 0.25 s fade
 )
-RAIL_DRAW = 2.20                              # s for 320 px: 145 px/s, a speed you can follow
+RAIL_DRAW = 2.00                              # s for 320 px: 160 px/s, a speed you can follow
 ROW_PITCH_S = RAIL_DRAW / 5                   # 0.44 s: rows overlap their 0.3 s rises
 
 # ── easing ──────────────────────────────────────────────────────────────────
@@ -180,9 +203,11 @@ def A_point(deg, face):
              ra=(shoulder * face, (deg - shoulder) * face), ll=(10, -8), rl=(-12, -8))
 
 def A_fold():
-    """The half-way house on the road to the think: arm OUT to the side, forearm straight, so the
-    limb travels round the head rather than across it."""
-    return P(lean=-3, tilt=4, la=(18, 15), ra=(-70, -10), ll=(8, -4), rl=(-8, -8))
+    """The half-way house on the road to the think: the upper arm swings OUT to the side with the
+    ELBOW BENT and the forearm hanging, so the limb travels round the head rather than across it
+    and never reads as a second point (a straight horizontal arm did — reviewer 1, defect 5).
+    From here the forearm swings up through the left side to the chin."""
+    return P(lean=-3, tilt=4, la=(18, 15), ra=(-58, 30), ll=(8, -4), rl=(-8, -8))
 
 def A_think():
     """Solved, not drawn: the hand under the head where a chin would be, 28 units from its centre,
@@ -230,6 +255,10 @@ def neck_world(p):
     s = skeleton(p)
     return p["hip"][0] + s["neck"][0] * SCALE, p["hip"][1] + s["neck"][1] * SCALE
 
+def shoulder_world(p):
+    s = skeleton(p)
+    return p["hip"][0] + s["shoulder"][0] * SCALE, p["hip"][1] + s["shoulder"][1] * SCALE
+
 def aim_deg(neck, target):
     dx, dy = target[0] - neck[0], target[1] - neck[1]
     return math.degrees(math.atan2(dx, dy))
@@ -237,9 +266,9 @@ def aim_deg(neck, target):
 TARGET_L = (TL_L_X + RAIL_INSET + RAIL_W / 2, RAIL_TOP)            # (44, 645) his birth tick
 TARGET_R = (TL_R_X + TL_W - RAIL_INSET - RAIL_W / 2, RAIL_TOP)     # (1876, 645) hers
 
-_neck0 = neck_world(grounded(A_point(-95, -1)))
-AIM_L = aim_deg(_neck0, TARGET_L)
-AIM_R = aim_deg(_neck0, TARGET_R)
+_sh0 = shoulder_world(grounded(A_point(-95, -1)))
+AIM_L = aim_deg(_sh0, TARGET_L)
+AIM_R = aim_deg(_sh0, TARGET_R)
 
 # ── the authored performance ────────────────────────────────────────────────
 # Every authored pose is normalised to face=+1 (`mirror` keeps the drawing), so the governor's
@@ -256,28 +285,30 @@ for _p in (grounded(dict(A_stand(), face=-1.0)), grounded(A_point(AIM_L, -1))):
     assert _same_drawing(_p, mirror(_p)), "mirror() changed the drawing"
 
 def turn(u):
-    """The turn, continuous (ARTA.md §3): every angle eases from the left-facing drawing to the
-    right-facing one. Taken literally that passes through a figure with every limb straight down,
-    which at 4 frames is the rig's own edge-on moment — but a body turning also swings its arms,
-    so a swing is added that peaks mid-turn and is zero at both ends, and the knees give a little
-    for weight. The feet move under 3 units, so nothing skates."""
+    """The turn, continuous (ARTA.md §3), and MOTIVATED: it starts from the left-facing point and
+    ends in the right-facing stand, so the pointing arm sweeps down and across as the body turns.
+    A stand mirrored through a frontal stand read as standing still while the camera moved
+    (reviewer 1, defect 9); an arm coming down while the shoulders swing round cannot. The free
+    arm counter-swings with a bent elbow, and the weight shifts: the rear knee lifts and bends
+    (the foot comes ~8 units off the floor and replants), so the legs are never one line through
+    the edge-on moment — reviewer 2's "pole with two stubs". The planted foot moves under
+    3 units, so nothing skates."""
     k = smooth(u)
-    p = blend_pose(STAND_L, STAND_R, k)
+    p = blend_pose(POINT_L, STAND_R, k)
     sw = math.sin(math.pi * k)
-    p["la"] = (p["la"][0] + 14 * sw, p["la"][1] + 6 * sw)
-    p["ra"] = (p["ra"][0] - 14 * sw, p["ra"][1] - 6 * sw)
+    p["la"] = (p["la"][0] + 22 * sw, p["la"][1] + 14 * sw)
     p["ll"] = (p["ll"][0] + 3 * sw, p["ll"][1] - 6 * sw)
-    p["rl"] = (p["rl"][0] - 3 * sw, p["rl"][1] - 6 * sw)
+    p["rl"] = (p["rl"][0] + 20 * sw, p["rl"][1] - 44 * sw)
     p["sq"] = 1.0 - 0.03 * sw
     return grounded(p)
 FOLD = grounded(A_fold()); THINK = grounded(A_think())
 
 def authored(t):
     """The pose Arta WANTS at t. The governor below is what it gets."""
-    if t < B["arm_down_l"]:
-        return POINT_L
+    if t < B["aim_l"]:
+        return STAND_L
     if t < B["turn"]:
-        return blend_pose(POINT_L, STAND_L, smooth(seg(t, B["arm_down_l"], B["arm_down_l_end"])))
+        return blend_pose(STAND_L, POINT_L, smooth(seg(t, B["aim_l"], B["aim_l_end"])))
     if t < B["aim_r"]:
         return turn(seg(t, B["turn"], B["turn_end"]))
     if t < B["arm_down_r"]:
@@ -290,13 +321,12 @@ def authored(t):
                     - smooth(seg(t, B["flinch"] + 0.20, B["flinch"] + 0.55)))
         return grounded(blend_pose(A_stand(), A_crouch(1.0), k))
     if t < B["think"]:
-        k = cycles(t, B["nod"], 1.3, 2)
+        k = cycles(t, B["nod"], B["nod_end"] - B["nod"], 1)
         p = A_stand(); p["tilt"] += 16 * k; p["lean"] += 3 * k
         return grounded(p)
-    u = seg(t, B["think"], B["think_end"])
-    if u < 0.5:
-        return grounded(blend_pose(A_stand(), A_fold(), smooth(u * 2)))
-    return grounded(blend_pose(A_fold(), A_think(), smooth((u - 0.5) * 2)))
+    if t < B["think_mid"]:
+        return grounded(blend_pose(A_stand(), A_fold(), smooth(seg(t, B["think"], B["think_mid"]))))
+    return grounded(blend_pose(A_fold(), A_think(), smooth(seg(t, B["think_mid"], B["think_end"]))))
 
 # ── the life layer: breath and seeded drift (arta.ts), scaled by calm ───────
 class Drift:
@@ -327,8 +357,8 @@ def alive(p, t, drifts, calm):
     return q
 
 # ── the camera: ONE camera, monotonic in scale, three framings ──────────────
-CAM_A = (1.40, 660.0, 690.0)      # his side + Arta:  world x -26..1346
-CAM_B = (1.32, 1169.0, 705.0)     # her side + Arta:  world x 442..1896
+CAM_A = (1.40, 660.0, 715.0)      # his side + Arta:  world x -26..1346; his birth tick at frame x 81
+CAM_B = (1.24, 1179.0, 760.0)     # her side + Arta:  world x 405..1953; her birth tick's right edge at frame x 1839 (81 px in)
 CAM_C = (1.00, 960.0, 540.0)      # the frame
 
 def camera(t):
@@ -339,6 +369,22 @@ def camera(t):
     s, cx, cy = lerp(s, CAM_B[0], u), lerp(cx, CAM_B[1], u), lerp(cy, CAM_B[2], u)
     u = smooth(seg(t, B["pull"], B["pull_end"]))
     return lerp(s, CAM_C[0], u), lerp(cx, CAM_C[1], u), lerp(cy, CAM_C[2], u)
+
+def frame_edges(cam):
+    """World x of the frame's left and right edges."""
+    s, cx, _ = cam
+    return cx - (W / 2) / s, cx + (W / 2) / s
+
+def list_op(side, cam):
+    """A list's opacity against the frame edge: it fades OUT over the 32 world px before the edge
+    reaches its tick and back IN as the edge leaves, so the frame edge never slices a word — or a
+    tick (reviewers 1 and 2: 88 frames of guillotined type in the pan and the pull). Full while
+    the edge is at or outside the frame's own edge (world x 0 / 1920, where the pull ends); gone
+    by the time the edge touches the tick."""
+    l, r = frame_edges(cam)
+    if side == "L":
+        return max(0.0, min(1.0, (TL_L_X - l) / 32.0))
+    return max(0.0, min(1.0, (r - (TL_R_X + TL_W - 8)) / 32.0))
 
 def to_frame(cam, x, y):
     s, cx, cy = cam
@@ -405,20 +451,24 @@ def hand_world(p):
     return p["hip"][0] + s["arms"][1][1][0] * SCALE, p["hip"][1] + s["arms"][1][1][1] * SCALE
 
 def arrow_at(t, poses):
-    """One short shaft in flight from the hand toward the mark it was aimed at, then out past the
-    frame's edge. Returns (tip, tail, opacity) in world px, or None."""
+    """One shaft in flight from the hand to the mark it was aimed at; it LANDS there, rests on the
+    tick for ARROW_STICK s while the tick fades in, then goes. It used to fly on out of the frame
+    and the rail began by timing alone. Returns (tip, tail, dir, opacity) in world px, or None."""
     for fire, target in ((B["fire_l"], TARGET_L), (B["fire_r"], TARGET_R)):
         age = t - fire
-        if age < 0 or age > 1.6:
+        if age < 0:
             continue
         p = poses[int(round(fire * FPS))]
         hx, hy = hand_world(p)
         dx, dy = target[0] - hx, target[1] - hy
         L = math.hypot(dx, dy); ux, uy = dx / L, dy / L
-        d = 18.0 + ARROW_SPEED * age                                     # tip distance from the hand
+        t_arr = fire + (L - 18.0) / ARROW_SPEED
+        if t > t_arr + ARROW_STICK:
+            continue
+        d = min(L, 18.0 + ARROW_SPEED * age)                             # tip distance from the hand
         tip = (hx + ux * d, hy + uy * d)
         tail = (tip[0] - ux * ARROW_SHAFT, tip[1] - uy * ARROW_SHAFT)
-        op = 0.85 * min(1.0, age / 0.12)
+        op = min(1.0, age / 0.12) * (1.0 - seg(t, t_arr + ARROW_STICK - 0.08, t_arr + ARROW_STICK))
         return tip, tail, (ux, uy), op
     return None
 
@@ -447,15 +497,30 @@ def rail_state(t, t_land, side):
     return dict(tip=tip, gold=gold_len, rows=rows, visible=t >= t_land)
 
 # ── the windows ─────────────────────────────────────────────────────────────
-def fall_y(t, t0, y_final):
-    """A slab with mass: ease-in over 0.55 s to 8 px past its seat, then a 0.18 s ease-out settle."""
-    u = seg(t, t0, t0 + 0.55)
+def fall_y(t, t0, y_final, y_from=-560.0, dur=FALL):
+    """A slab with mass: gravity (u^2) over `dur` s to OVERSHOOT px past its seat, then a SETTLE s
+    ease-out back. The old cubic ease-in over 0.55 s took 200 px steps on its last frames — five
+    positions of a 360 px slab (reviewer 2, defect 2); u^2 over 0.9 s keeps the last step under
+    55 px, and the slab is drawn with a motion blur proportional to that step."""
+    u = seg(t, t0, t0 + dur)
     if u <= 0:
         return None
-    y = lerp(-560.0, y_final + 8.0, ease_in(u))
+    y = lerp(y_from, y_final + OVERSHOOT, u * u)
     if u >= 1.0:
-        y = lerp(y_final + 8.0, y_final, ease_out(seg(t, t0 + 0.55, t0 + 0.73)))
+        y = lerp(y_final + OVERSHOOT, y_final, ease_out(seg(t, t0 + dur, t0 + dur + SETTLE)))
     return y
+
+def window_y(t, key):
+    win, beat, y_from, dur = WINDOWS[key]
+    return fall_y(t, B[beat], win[1], y_from, dur)
+
+def window_seated(t, key):
+    return window_y(t, key) == WINDOWS[key][0][1]
+
+def lower_third_at(key):
+    """When a window's lower-third rises: settled, plus the kit's 0.17 s beat."""
+    _, beat, _, dur = WINDOWS[key]
+    return B[beat] + dur + SETTLE + 0.17
 
 # ── type metrics (measured in the browser, see render.mjs measure) ──────────
 FONTS = dict(m700=HERE.parent / "teaser" / "fonts" / "Montserrat-700.ttf",
@@ -520,7 +585,7 @@ def row_layout(M):
     """Returns per side per row: year (x, baseline, anchor), label (x, baseline, anchor), and the
     live text box (x0, y0, x1, y1) in world px, for the label gate."""
     yb = _baseline(YEAR_FONT, 36); lb = _baseline(LABEL_FONT, 36)
-    out = {"L": [], "R": []}
+    out = {"L": [], "R": [], "M": M}
     for i in range(6):
         cy = tick_cy(i); top = cy - 32 + 14                     # the 36 px line box, centred in 64
         yw, lw = M[f"yrL{i}"]["w"], M[f"labL{i}"]["w"]
@@ -548,12 +613,19 @@ def lower_third(M, win, key, lines, sub, name_font):
     parts = [f'<rect x="{wx}" y="{num(top)}" width="10" height="{total}" fill="{BLUE}"/>',
              f'<rect x="{wx + 10}" y="{num(top)}" width="{num(name_w)}" height="{name_h}" fill="#000000" fill-opacity="0.8"/>']
     nb = _baseline(name_font, lh)
+    boxes = []
     for j, line in enumerate(lines):
-        parts.append(text_el(line, name_font, wx + 10 + 20, top + 10 + lh * j + nb, INK))
+        x, y = wx + 10 + 20, top + 10 + lh * j + nb
+        parts.append(text_el(line, name_font, x, y, INK))
+        m = M[f"name{key}{j}"]
+        boxes.append((x + m["x"], y + m["y"], x + m["x"] + m["w"], y + m["y"] + m["h"]))
     st = bottom - sub_h
     parts.append(f'<rect x="{wx + 10}" y="{num(st)}" width="{num(sub_w)}" height="{sub_h}" fill="#000000" fill-opacity="0.8"/>')
-    parts.append(text_el(sub, SUB_FONT, wx + 10 + 20, st + 6 + _baseline(SUB_FONT, 48), INK))
-    return "".join(parts)
+    x, y = wx + 10 + 20, st + 6 + _baseline(SUB_FONT, 48)
+    parts.append(text_el(sub, SUB_FONT, x, y, INK))
+    m = M[f"sub{key}"]
+    boxes.append((x + m["x"], y + m["y"], x + m["x"] + m["w"], y + m["y"] + m["h"]))
+    return "".join(parts), boxes
 
 # ── one frame as SVG ────────────────────────────────────────────────────────
 def figure_svg(p):
@@ -563,11 +635,14 @@ def figure_svg(p):
         return '<path d="M' + "L".join(f"{num(x)} {num(y)}" for x, y in pts) + '"/>'
     body = [pl((0, 0), s["neck"])]
     for i in (0, 1):
-        body.append(pl(s["neck"], s["arms"][i][0], s["arms"][i][1]))
+        body.append(pl(s["shoulder"], s["arms"][i][0], s["arms"][i][1]))
         body.append(pl((0, 0), s["legs"][i][0], s["legs"][i][1]))
     body.append(f'<circle cx="{num(s["head"][0])}" cy="{num(s["head"][1])}" r="{num(HEAD_R)}"/>')
     return (f'<g transform="translate({num(hx)} {num(hy)}) scale({SCALE})" fill="none" stroke="{GOLD}" '
             f'stroke-width="{STROKE}" stroke-linecap="round" stroke-linejoin="round">' + "".join(body) + "</g>")
+
+def hairline_op(t):
+    return (0.20 + 0.05 * math.sin(2 * math.pi * 0.08 * t)) * (1.0 - smooth(seg(t, B["win_host"] + 0.6, B["win_host"] + 0.9)))
 
 def frame_svg(frame, poses, M, layout, t_land_l, t_land_r):
     t = frame * DT
@@ -578,42 +653,59 @@ def frame_svg(frame, poses, M, layout, t_land_l, t_land_r):
            f'<radialGradient id="amb" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="{SPACE3}" stop-opacity="0.85"/>'
            f'<stop offset="0.55" stop-color="{SPACE3}" stop-opacity="0.35"/><stop offset="1" stop-color="{SPACE3}" stop-opacity="0"/></radialGradient>',
            '<radialGradient id="vig" cx="0.5" cy="0.5" r="0.5"><stop offset="0.50" stop-color="#000" stop-opacity="0"/>'
-           '<stop offset="0.82" stop-color="#000" stop-opacity="0.16"/><stop offset="1" stop-color="#000" stop-opacity="0.42"/></radialGradient>']
+           '<stop offset="0.82" stop-color="#000" stop-opacity="0.16"/><stop offset="1" stop-color="#000" stop-opacity="0.42"/></radialGradient>',
+           f'<linearGradient id="hair" gradientUnits="userSpaceOnUse" x1="{num(HAIR_X0)}" y1="0" x2="{num(HAIR_X1)}" y2="0">'
+           f'<stop offset="0" stop-color="{INK3}" stop-opacity="0"/><stop offset="0.25" stop-color="{INK3}" stop-opacity="1"/>'
+           f'<stop offset="0.75" stop-color="{INK3}" stop-opacity="1"/><stop offset="1" stop-color="{INK3}" stop-opacity="0"/></linearGradient>']
     for k, (wx, wy, ww, wh) in (("cm", WIN_MAN), ("cw", WIN_WOMAN), ("ch", WIN_HOST)):
         out.append(f'<clipPath id="{k}"><rect x="{wx}" y="{wy}" width="{ww}" height="{wh}" rx="{WIN_R}"/></clipPath>')
+    # the host emerges from BEHIND the couple's windows: nothing of it is drawn above their bottom edge
+    out.append(f'<clipPath id="below"><rect x="-2000" y="{WIN_MAN[1] + WIN_MAN[3]}" width="6000" height="3000"/></clipPath>')
+    blur = {}
+    for key in WINDOWS:
+        y0, y1 = window_y(t - DT, key), window_y(t, key)
+        v = 0.0 if y0 is None or y1 is None else abs(y1 - y0)
+        if v > 6.0:
+            blur[key] = v
+            out.append(f'<filter id="mb_{key}" x="-5%" y="-40%" width="110%" height="180%">'
+                       f'<feGaussianBlur stdDeviation="0 {num(v / 3.0)}"/></filter>')
     out.append('</defs>')
     out.append(f'<rect width="{W}" height="{H}" fill="{BG}"/>')
     out.append(f'<g transform="translate({W / 2} {H / 2}) scale({num(s)}) translate({num(-cx)} {num(-cy)})">')
 
-    # the ambient and the hairline belong to the shot; both are gone when the shot becomes the frame
+    # the ambient and the hairline belong to the shot; both are gone when the shot becomes the frame.
+    # The hairline is a soft-ended floor mark under Arta (HAIR_X0..HAIR_X1): it never runs under a
+    # rail, so a sixth row rising from +24 px is never struck through by it (reviewer 1, defect 4).
     stage = 1.0 - smooth(seg(t, B["vig_off"], B["vig_off_end"]))
     if stage > 0:
         out.append(f'<ellipse cx="{ARTA_X}" cy="820" rx="760" ry="520" fill="url(#amb)" opacity="{num(stage)}"/>')
-    hair = (0.20 + 0.05 * math.sin(2 * math.pi * 0.08 * t)) * (1.0 - smooth(seg(t, B["win_host"] + 0.55, B["win_host"] + 0.85)))
+    hair = hairline_op(t)
     if hair > 0:
-        out.append(f'<line x1="-700" y1="{GROUND}" x2="2620" y2="{GROUND}" stroke="{INK3}" stroke-width="1.5" opacity="{num(hair)}"/>')
+        out.append(f'<line x1="{num(HAIR_X0)}" y1="{GROUND}" x2="{num(HAIR_X1)}" y2="{GROUND}" stroke="url(#hair)" stroke-width="1.5" opacity="{num(hair)}"/>')
 
-    # the windows, behind everything
-    for key, win, t0, lt in (("cm", WIN_MAN, B["win_man"], ("M",) + LT_MAN),
-                             ("cw", WIN_WOMAN, B["win_woman"], ("W",) + LT_WOMAN),
-                             ("ch", WIN_HOST, B["win_host"], None)):
-        y = fall_y(t, t0, win[1])
+    # the windows, behind everything; the host first (beneath the couple) and clipped below them
+    for key, lt in (("ch", None), ("cm", ("M",) + LT_MAN), ("cw", ("W",) + LT_WOMAN)):
+        y = window_y(t, key)
         if y is None:
             continue
-        wx, wy, ww, wh = win
-        out.append(f'<rect x="{wx}" y="{num(y)}" width="{ww}" height="{wh}" rx="{WIN_R}" fill="{SPACE3}"/>')
+        wx, wy, ww, wh = WINDOWS[key][0]
+        f = f' filter="url(#mb_{key})"' if key in blur else ""
+        rect = f'<rect x="{wx}" y="{num(y)}" width="{ww}" height="{wh}" rx="{WIN_R}" fill="{SPACE3}"{f}/>'
+        out.append(f'<g clip-path="url(#below)">{rect}</g>' if key == "ch" else rect)
         if lt and LOWER_THIRDS:
-            op, dy = rise(t, t0 + 0.73 + 0.17)
+            op, dy = rise(t, lower_third_at(key))
             if op > 0:
                 nf = NAME_FONT_2 if len(lt[1]) > 1 else NAME_FONT_1
-                out.append(f'<g clip-path="url(#{key})"><g opacity="{num(op)}" transform="translate(0 {num(dy)})">'
-                           + lower_third(M, win, lt[0], lt[1], lt[2], nf) + '</g></g>')
+                svg, _ = lower_third(M, WINDOWS[key][0], lt[0], lt[1], lt[2], nf)
+                out.append(f'<g clip-path="url(#{key})"><g opacity="{num(op)}" transform="translate(0 {num(dy)})">' + svg + '</g></g>')
 
     # the rails
     for side, rows, x0, t_land in (("L", ROWS_L, TL_L_X, t_land_l), ("R", ROWS_R, TL_R_X, t_land_r)):
         st = rail_state(t, t_land, side)
-        if not st["visible"]:
+        lop = list_op(side, cam)
+        if not st["visible"] or lop <= 0:
             continue
+        out.append(f'<g opacity="{num(lop)}">')
         rx = x0 + RAIL_INSET if side == "L" else x0 + TL_W - RAIL_INSET - RAIL_W
         out.append(f'<rect x="{rx}" y="{RAIL_TOP}" width="{RAIL_W}" height="{num(st["tip"] - RAIL_TOP)}" fill="{INK3}"/>')
         if st["gold"] > 0:
@@ -629,6 +721,7 @@ def frame_svg(frame, poses, M, layout, t_land_l, t_land_r):
                 out.append(f'<g opacity="{num(r["op"])}" transform="translate(0 {num(r["dy"])})">'
                            + text_el(rows[k][0], YEAR_FONT, L["yr"][0], L["yr"][1], r["col"], L["yr"][2])
                            + text_el(rows[k][1], LABEL_FONT, L["lab"][0], L["lab"][1], r["col"], L["lab"][2]) + "</g>")
+        out.append('</g>')
 
     out.append(figure_svg(poses[frame]))
 
@@ -636,11 +729,11 @@ def frame_svg(frame, poses, M, layout, t_land_l, t_land_r):
     if a:
         (tx, ty), (bx, by), (ux, uy), op = a
         px, py = -uy, ux
-        bw = 13 * SCALE / 1.6; bo = 8 * SCALE / 1.6
+        bw, bo = ARROW_BARB
         d = (f"M{num(bx)} {num(by)}L{num(tx)} {num(ty)}"
              f"M{num(tx - ux * bw + px * bo)} {num(ty - uy * bw + py * bo)}L{num(tx)} {num(ty)}"
              f"L{num(tx - ux * bw - px * bo)} {num(ty - uy * bw - py * bo)}")
-        out.append(f'<path d="{d}" fill="none" stroke="{BLUE}" stroke-width="{num(3.2 * SCALE)}" '
+        out.append(f'<path d="{d}" fill="none" stroke="{BLUE}" stroke-width="{num(ARROW_STROKE * SCALE)}" '
                    f'stroke-linecap="round" stroke-linejoin="round" opacity="{num(op)}"/>')
     out.append('</g>')
 
@@ -659,7 +752,7 @@ def head_intrusion(p):
     s = skeleton(p)
     nx, ny = s["neck"]; hx, hy = s["head"]
     worst = 0.0
-    for chain in ([s["neck"], s["arms"][0][0], s["arms"][0][1]], [s["neck"], s["arms"][1][0], s["arms"][1][1]],
+    for chain in ([s["shoulder"], s["arms"][0][0], s["arms"][0][1]], [s["shoulder"], s["arms"][1][0], s["arms"][1][1]],
                   [(0.0, 0.0), s["legs"][0][0], s["legs"][0][1]], [(0.0, 0.0), s["legs"][1][0], s["legs"][1][1]]):
         for (ax, ay), (bx, by) in zip(chain, chain[1:]):
             L = math.hypot(bx - ax, by - ay); n = max(1, int(math.ceil(L)))
@@ -705,7 +798,7 @@ def check(poses, peaks, governed, layout, t_land_l, t_land_r, verbose=True):
         W_ = lambda q: (hx + q[0] * SCALE, hy + q[1] * SCALE)
         segs = [(W_((0, 0)), W_(s["neck"]))]
         for j in (0, 1):
-            segs += [(W_(s["neck"]), W_(s["arms"][j][0])), (W_(s["arms"][j][0]), W_(s["arms"][j][1])),
+            segs += [(W_(s["shoulder"]), W_(s["arms"][j][0])), (W_(s["arms"][j][0]), W_(s["arms"][j][1])),
                      (W_((0, 0)), W_(s["legs"][j][0])), (W_(s["legs"][j][0]), W_(s["legs"][j][1]))]
         hc = W_(s["head"])
         for side, t_land in (("L", t_land_l), ("R", t_land_r)):
@@ -718,28 +811,95 @@ def check(poses, peaks, governed, layout, t_land_l, t_land_r, verbose=True):
                     label_hits += 1
     if label_hits:
         fails.append(f"labels: figure inside a live label box on {label_hits} frame-rows")
-    # 4. the aim: the forearm at fire time lies on the line to the mark
+    # 4. the aim: the whole arm at fire time lies on the line from the shoulder to the mark
     for fire, target, name in ((B["fire_l"], TARGET_L, "left"), (B["fire_r"], TARGET_R, "right")):
         p = poses[int(round(fire * FPS))]
-        nk = neck_world(p); hd = hand_world(p)
+        nk = shoulder_world(p); hd = hand_world(p)
         want = math.atan2(target[0] - nk[0], target[1] - nk[1])
         got = math.atan2(hd[0] - nk[0], hd[1] - nk[1])
         err = abs(math.degrees(want - got))
         if err > 2.0:
             fails.append(f"aim {name}: forearm off the mark by {err:.1f} deg")
-    # 5. the last held frame is the show's frame: no shot dressing left, all windows seated
+    # 5. the last held frame is the show's frame: no shot dressing left, all THREE windows seated,
+    #    and the whole figure (stroke included) inside the host's window — Arta in the host's chair
     tl = int(round((B["fade"] - 0.05) * FPS))
-    if fall_y(tl * DT, B["win_host"], WIN_HOST[1]) != WIN_HOST[1] or fall_y(tl * DT, B["win_man"], 18) != 18:
-        fails.append("frame: a window is not seated on the last held frame")
+    for key in WINDOWS:
+        if not window_seated(tl * DT, key):
+            fails.append(f"frame: window {key} is not seated on the last held frame")
     if 1.0 - smooth(seg(tl * DT, B["vig_off"], B["vig_off_end"])) > 0:
         fails.append("frame: the vignette is still on at the last held frame")
+    if hairline_op(tl * DT) > 0:
+        fails.append("frame: the hairline is still on at the last held frame")
+    hx0, hy0, hw_, hh_ = WIN_HOST
+    fig_x0 = fig_y0 = 1e9; fig_x1 = fig_y1 = -1e9
+    for i in range(int(round(B["win_host"] * FPS)), N):                # from the host's fall to the end
+        s = skeleton(poses[i]); ox, oy = poses[i]["hip"]
+        for (x, y) in world_pts(poses[i]):
+            fig_x0, fig_x1 = min(fig_x0, x - r), max(fig_x1, x + r)
+            fig_y0, fig_y1 = min(fig_y0, y - r), max(fig_y1, y + r)
+        hc = (ox + s["head"][0] * SCALE, oy + s["head"][1] * SCALE)
+        fig_x0, fig_x1 = min(fig_x0, hc[0] - RING * SCALE), max(fig_x1, hc[0] + RING * SCALE)
+        fig_y0 = min(fig_y0, hc[1] - RING * SCALE)
+    if fig_y0 < hy0 or fig_x0 < hx0 or fig_x1 > hx0 + hw_ or fig_y1 > hy0 + hh_ + r + 0.5:
+        fails.append(f"host: the figure leaves the host window (x {fig_x0:.0f}..{fig_x1:.0f}, y {fig_y0:.0f}..{fig_y1:.0f}) "
+                     f"against ({hx0}, {hy0}, {hx0 + hw_}, {hy0 + hh_})")
+    # 6. every mark is INSIDE the frame when its arrow lands, with a margin (reviewer 2, defect 1)
+    for t_land, target, name in ((t_land_l, TARGET_L, "left"), (t_land_r, TARGET_R, "right")):
+        fx, fy = to_frame(camera(t_land), *target)
+        if not (24 <= fx <= W - 24 and 24 <= fy <= H - 24):
+            fails.append(f"arrival {name}: the mark is at frame ({fx:.0f}, {fy:.0f}) when the arrow lands at t={t_land:.2f}s")
+    # 7. no visible type is cut by the frame edge, ever: every live text box (rows and lower-thirds)
+    #    at effective opacity > 0.02 lies wholly inside the frame (reviewers 1 and 2)
+    edge_cuts = 0
+    for i in range(N):
+        t = i * DT; cam = camera(i * DT)
+        boxes = []
+        for side, t_land in (("L", t_land_l), ("R", t_land_r)):
+            lop = list_op(side, cam)
+            if t < t_land or lop <= 0.02:
+                continue
+            for k in range(6):
+                op, _ = rise(t, t_land + ROW_PITCH_S * k + (0.08 if k == 0 else 0.0))
+                if op * lop > 0.02:
+                    boxes.append((f"{side}{k}", layout[side][k]["box"]))
+        if LOWER_THIRDS:
+            for key, lt in (("cm", ("M",) + LT_MAN), ("cw", ("W",) + LT_WOMAN)):
+                op, _ = rise(t, lower_third_at(key))
+                if op > 0.02:
+                    nf = NAME_FONT_2 if len(lt[1]) > 1 else NAME_FONT_1
+                    _, bx = lower_third(layout["M"], WINDOWS[key][0], lt[0], lt[1], lt[2], nf)
+                    boxes += [(key, b) for b in bx]
+        for name, (x0, y0, x1, y1) in boxes:
+            fx0, fy0 = to_frame(cam, x0, y0); fx1, fy1 = to_frame(cam, x1, y1)
+            if fx0 < 0 or fx1 > W or fy0 < 0 or fy1 > H:
+                edge_cuts += 1
+                if edge_cuts <= 3:
+                    fails.append(f"edge: text {name} cut by the frame at f{i:03d} (frame x {fx0:.0f}..{fx1:.0f}, y {fy0:.0f}..{fy1:.0f})")
+    if edge_cuts > 3:
+        fails.append(f"edge: {edge_cuts} frame-boxes of type cut by the frame edge in all")
+    # 8. no slab takes a step over 60 frame px while it falls, and the couple's windows are never
+    #    overdrawn by the host: the host is drawn first AND clipped below their bottom edge
+    step_worst, step_key, step_frame = 0.0, "", 0
+    for key in WINDOWS:
+        for i in range(1, N):
+            y0, y1 = window_y((i - 1) * DT, key), window_y(i * DT, key)
+            if y0 is not None and y1 is not None and abs(y1 - y0) > step_worst:
+                step_worst, step_key, step_frame = abs(y1 - y0), key, i
+    if step_worst > 60.0:
+        fails.append(f"windows: slab {step_key} steps {step_worst:.0f} px at f{step_frame:03d}")
     if verbose:
         print(f"gate · motion   peak {peaks[worst]:.2f} px/frame at f{worst:03d} (t={worst * DT:.2f}s) · budget {MAX_PX_PER_FRAME:.0f} px "
               f"= min(640·dt, 12) at {FPS} fps · governor acted on {governed} of {N} frames · camera alone peaks {cam_peak:.2f} px")
         print(f"gate · head     worst intrusion {hw:.2f} units (ring {RING:.0f} = r{HEAD_R:.0f} + stroke/2, shoulder excl. {SHOULDER_EXCL:.0f}) at f{hi:03d}")
         print(f"gate · labels   {label_hits} frame-rows with figure ink inside a live text box")
         print(f"gate · aim      left {AIM_L:.1f} deg -> {TARGET_L} at t={t_land_l:.2f}s · right {AIM_R:.1f} deg -> {TARGET_R} at t={t_land_r:.2f}s")
-        print(f"gate · frame    last held frame f{tl:03d}: windows seated, vignette off, hairline off")
+        print(f"gate · frame    last held frame f{tl:03d}: {len(WINDOWS)} windows seated, vignette off, hairline off; "
+              f"figure x {fig_x0:.0f}..{fig_x1:.0f} y {fig_y0:.0f}..{fig_y1:.0f} inside the host window {WIN_HOST}")
+        for t_land, target, name in ((t_land_l, TARGET_L, "left"), (t_land_r, TARGET_R, "right")):
+            fx, fy = to_frame(camera(t_land), *target)
+            print(f"gate · arrival  {name} mark at frame ({fx:.0f}, {fy:.0f}) at t={t_land:.2f}s, {min(fx, W - fx):.0f} px from the nearer edge")
+        print(f"gate · edge     {edge_cuts} frame-boxes of visible type cut by the frame edge")
+        print(f"gate · windows  largest slab step {step_worst:.0f} px ({step_key} at f{step_frame:03d}); host drawn beneath the couple, clipped below y={WIN_MAN[1] + WIN_MAN[3]}")
         for f in fails:
             print("FAIL ·", f)
     return fails
@@ -798,8 +958,10 @@ def render(stats):
         motion=dict(law="ARTA.md §3: no drawn point of the figure moves more than min(640 px/s·dt, 12 px) per frame, in frame px, camera included",
                     budget_px=MAX_PX_PER_FRAME, peak_px=round(peaks[worst], 3), peak_frame=worst, governed_frames=stats["governed"]),
         head_gate=dict(rule="no limb sample inside the ring's outer edge (r + stroke/2 = 24 units), samples within 13 units of the neck excluded"),
+        figure=dict(shoulder_drop_units=SHOULDER_DROP, note="the arms are drawn from a shoulder 7 rig units down the spine; the rig's angles and lengths are unchanged"),
         exceptions=dict(arrow=f"a tool, not a drawn point of the figure: {ARROW_SPEED / FPS:.0f} world px/frame against a {ARROW_SHAFT:.0f} px shaft, so consecutive drawings overlap by half",
-                        windows="slabs with mass: ease-in 0.55 s, 8 px overshoot, 0.18 s settle — no per-frame ceiling applies"),
+                        windows=f"slabs with mass: gravity (u^2) over {FALL} s ({WINDOWS['ch'][3]} s for the host, from behind the couple), "
+                                f"{OVERSHOOT:.0f} px overshoot, {SETTLE} s settle; steps capped at 60 px and motion-blurred; no per-frame ceiling applies"),
         sample_data="fictional (the kit's own Main sample); no photographic or generated people; the seats are empty",
         lower_thirds=LOWER_THIRDS, scale=SCALE, stroke_units=STROKE,
     )
