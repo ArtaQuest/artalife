@@ -605,6 +605,10 @@ export type Floor = {
   /** Arta's home. Where it starts, and where it goes when it has nothing else
    *  to do. Exactly one surface should carry this. */
   home?: boolean;
+  /** The surface's real extent when x1..x2 is only the CLEAR part of it — a
+   *  run of the tab bar with something floating over the rest. Arta stands
+   *  (is supported) anywhere on `solid`, but only chooses to be on x1..x2. */
+  solid?: { x1: number; x2: number };
 };
 
 /**
@@ -681,7 +685,8 @@ export function floorUnder(
 ): number {
   let best = ground;
   for (const f of floors) {
-    if (x < f.x1 - 8 || x > f.x2 + 8) continue;
+    const s = f.solid ?? f;                 // support is the whole surface
+    if (x < s.x1 - 8 || x > s.x2 + 8) continue;
     if (f.y < feetY - rise) continue;       // too far above to step onto
     if (f.y < best) best = f.y;             // nearer than the current candidate
   }
