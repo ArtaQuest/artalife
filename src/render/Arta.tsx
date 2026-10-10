@@ -30,6 +30,8 @@ import { Brain, RIG, SAFE, homeFloor, onArtaCommand, type Act, type Cmd, type Fl
  *  whose raised hands reach about 330 above the sole. */
 const WORLD_H = 380;
 const GROUND = 340;
+/** Arta's line weight in CSS px — one value for every device (see the <g>). */
+export const ARTA_STROKE = 4.5;
 
 export type ArtaProps = {
   /** Rendered height in CSS pixels. Arta occupies ~57% of it. */
@@ -193,6 +195,19 @@ export default function Arta({
     let lastCheck = 0;
     let raf = 0;
     let prev = 0;
+    /** Smoothed frame interval. rAF timestamps jitter by a millisecond or two
+     *  and the odd frame is dropped; feeding that raw dt into the sim makes a
+     *  walking figure visibly stutter (a 33 ms frame moves it twice as far as
+     *  its neighbours). A short low-pass keeps motion even, while a real change
+     *  of refresh rate (60 → 120 Hz, battery saver) is followed within ~10
+     *  frames. Long gaps (tab switch, GC pause) are clamped, not fast-forwarded. */
+    let dtS = 1 / 60;
+    /** While a ledge is MOVING (the dock drawer sliding, a keyboard resizing the
+     *  viewport) floors are read every frame instead of at 4 Hz, so Arta's feet
+     *  ride the lid instead of lagging it by up to 250 ms and then snapping. */
+    let floorsHotUntil = 0;
+    const floorSig = (fl: Floor[]) => fl.map((f) => `${f.x1.toFixed(0)},${f.x2.toFixed(0)},${f.y.toFixed(0)}`).join("|");
+    let lastSig = "";
 
     const setBox = () => {
       if (fill) scale = RIG.HEIGHT / figureFor(el.clientWidth);
@@ -324,8 +339,13 @@ export default function Arta({
 
     const frame = (now: number) => {
       raf = requestAnimationFrame(frame);
-      const dt = prev ? (now - prev) / 1000 : 0;
+      const raw = prev ? (now - prev) / 1000 : 0;
       prev = now;
+      if (raw > 0) {
+        const c = Math.min(Math.max(raw, 1 / 240), 1 / 20);
+        dtS += (c - dtS) * (Math.abs(c - dtS) > 0.012 ? 0.5 : 0.18);
+      }
+      const dt = raw > 0 ? dtS : 0;
       // Low-pass the pointer before the head chases it, HARD.
       //
       // A shake is direction reversals, not distance, so the speed limit in the
@@ -344,8 +364,15 @@ export default function Arta({
         const g = 1 - Math.exp(-4 * dt);
         look = { x: look.x + (rawLook.x - look.x) * g, y: look.y + (rawLook.y - look.y) * g };
       }
-      if (now - floorsAt > 250) {
+      if (now - floorsAt > 250 || now < floorsHotUntil) {
+        const homeWas = placed ? homeFloor(floors) : null;
         floors = readFloors(); floorsAt = now;
+        if (homeWas) {
+          const homeNow = homeFloor(floors);
+          if (homeNow && Math.abs(homeNow.y - homeWas.y) > 0.5) brain.ride(homeWas.y, homeNow.y);
+        }
+        const sig = floorSig(floors);
+        if (sig !== lastSig) { if (lastSig) floorsHotUntil = now + 600; lastSig = sig; }
         if (!placed) {
           const home = homeFloor(floors);
           if (home) { placed = true; brain.placeAt({ x: (home.x1 + home.x2) / 2, y: home.y - RIG.HIP }, gnd); }
@@ -364,7 +391,11 @@ export default function Arta({
         const grounded = floors.length > 0;
         if (grounded !== shown) {
           shown = grounded;
-          el.style.visibility = grounded ? "" : "hidden";
+          // Fade rather than pop: opacity is compositor-only, and visibility
+          // follows only once the fade-out has finished (see transitionend).
+          el.style.transition = "opacity 260ms cubic-bezier(0.22, 1, 0.36, 1)";
+          if (grounded) el.style.visibility = "";
+          el.style.opacity = grounded ? "1" : "0";
           el.setAttribute("data-arta-grounded", grounded ? "1" : "0");
         }
       }
@@ -375,13 +406,23 @@ export default function Arta({
       paint(f);   // every frame: the brief is smoothness, not the drawn cadence
     };
 
+    const onFadeEnd = () => { if (!shown) el.style.visibility = "hidden"; };
+    el.addEventListener("transitionend", onFadeEnd);
+    // Isolate the layer: the companion repaints its own SVG every frame, and
+    // containment keeps that from invalidating layout or paint of the page.
+    el.style.contain = "layout paint style";
+
     const startLoop = () => {
       if (raf || reduce?.matches) return;
       prev = 0;
+      dtS = 1 / 60;
       raf = requestAnimationFrame(frame);
     };
     const stopLoop = () => { if (raf) cancelAnimationFrame(raf); raf = 0; };
 
+    // A resize moves every fixed ledge at once (rotation, keyboard, URL bar).
+    const onResize = () => { floorsHotUntil = performance.now() + 600; };
+    window.addEventListener("resize", onResize, { passive: true });
     // ── inputs ──────────────────────────────────────────────────────────────
     // Dead zone: below this the pointer has not really moved, it has wobbled.
     // Stated in CSS px so it means the same thing at every stage size.
@@ -497,6 +538,7 @@ export default function Arta({
 
     return () => {
       stopLoop();
+      el.removeEventListener("transitionend", onFadeEnd);
       window.clearInterval(beat);
       io.disconnect(); ro.disconnect();
       unsubscribe();
@@ -505,6 +547,7 @@ export default function Arta({
       window.removeEventListener("pointerup", onLeave);
       window.removeEventListener("pointercancel", onLeave);
       window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("visibilitychange", onVis);
       reduce?.removeEventListener?.("change", onReduce);
@@ -538,7 +581,12 @@ export default function Arta({
           vectorEffect="non-scaling-stroke" className="text-arta-tool"
         />
         <g
-          fill="none" stroke="currentColor" strokeWidth="7"
+          /* BODY WEIGHT: 4.5 CSS px on every device. non-scaling-stroke makes
+             it a CSS-pixel width, so it is the same at DPR 1, 2 and 3, at any
+             browser zoom and whatever the figure's height — a phone's smaller
+             figure is no longer drawn in a desktop-weight line (7 px read as
+             heavy, worst on the tab bar). Upright, lighter, still legible. */
+          fill="none" stroke="currentColor" strokeWidth={ARTA_STROKE}
           strokeLinecap="round" strokeLinejoin="round"
           vectorEffect="non-scaling-stroke" className="text-arta"
         >
