@@ -860,6 +860,20 @@ export class Brain {
     this.pose = { ...this.pose, x: goal.x, y: Math.min(goal.y, ground - RIG.HIP) };
   }
 
+  /**
+   * The ledge under Arta moved (a drawer opening, a keyboard lifting the dock).
+   * Someone standing on a lift rises WITH it; before this, a lid that jumped
+   * 500 px left Arta standing on air for a frame, then falling to the stage
+   * floor and roping back up to where it had been standing all along.
+   * Only applies while grounded on that ledge — mid-flight, on a rope or on a
+   * different surface, the move is none of Arta's business.
+   */
+  ride(fromY: number, toY: number) {
+    if (this.act === "fly" || this.anchor) return;
+    if (Math.abs(this.pose.y + RIG.HIP - fromY) > 16) return;
+    this.pose = { ...this.pose, y: this.pose.y + (toY - fromY) };
+  }
+
   /** Ask Arta to do something. Queued, never interrupting mid-gesture. */
   command(act: Act, opts: { at?: XY; x?: number } = {}) {
     if (this.queue.length > 3) this.queue.shift();
