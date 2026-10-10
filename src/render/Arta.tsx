@@ -50,6 +50,8 @@ export type ArtaProps = {
   /** How much of the stage Arta may wander across, as fractions of its width.
    *  Keeps it out of the headline when the stage is full-bleed behind text. */
   range?: [number, number];
+  /** z-index while on the rope (climbing past a panel it would otherwise be behind). */
+  ropeZ?: number;
   /** Draw the hairline Arta stands on. */
   ground?: boolean;
   className?: string;
@@ -65,7 +67,7 @@ export type ArtaProps = {
 
 export default function Arta({
   height = 220, start = 0.5, range = [0.08, 0.92], ground = true, className,
-  fill = false, figure = 132,
+  fill = false, figure = 132, ropeZ,
 }: ArtaProps) {
   // Destructured to stable primitives: a `[a, b]` literal prop is a new array
   // every render, so using it directly in the dependency array would re-run the
@@ -208,6 +210,9 @@ export default function Arta({
     let floorsHotUntil = 0;
     const floorSig = (fl: Floor[]) => fl.map((f) => `${f.x1.toFixed(0)},${f.x2.toFixed(0)},${f.y.toFixed(0)}`).join("|");
     let lastSig = "";
+    let lastHome: Floor | null = null;
+    let frozenY: number | null = null;
+    let settled = 0;
 
     const setBox = () => {
       if (fill) scale = RIG.HEIGHT / figureFor(el.clientWidth);
@@ -240,7 +245,12 @@ export default function Arta({
       // The current act, on the DOM. Costs one attribute write per state change
       // and makes the whole state machine observable from the outside — which is
       // the only reason the reduced-motion arrow bug was findable at all.
-      if (f.act !== shownAct) { shownAct = f.act; el.setAttribute("data-act", f.act); }
+      if (f.act !== shownAct) {
+        shownAct = f.act; el.setAttribute("data-act", f.act);
+        // On the rope, Arta is in front of whatever it is climbing past (the
+        // host says how far forward with `ropeZ`); back in its layer after.
+        if (ropeZ !== undefined) el.style.zIndex = f.act === "throw" || f.act === "fly" ? String(ropeZ) : "";
+      }
       // Self-reporting invariant: this attribute must never appear. It is the
       // cheapest possible way to notice a future gesture outrunning the limit.
       if (f.peakPx > SAFE.MAX_PX_PER_FRAME + 0.5) el.setAttribute("data-overspeed", f.peakPx.toFixed(1));
@@ -365,12 +375,25 @@ export default function Arta({
         look = { x: look.x + (rawLook.x - look.x) * g, y: look.y + (rawLook.y - look.y) * g };
       }
       if (now - floorsAt > 250 || now < floorsHotUntil) {
-        const homeWas = placed ? homeFloor(floors) : null;
         floors = readFloors(); floorsAt = now;
-        if (homeWas) {
-          const homeNow = homeFloor(floors);
-          if (homeNow && Math.abs(homeNow.y - homeWas.y) > 0.5) brain.ride(homeWas.y, homeNow.y);
+        /*
+         * A MOVING home ledge (a drawer sliding open or shut) is followed as
+         * ONE move, not frame by frame: while it travels, Arta keeps standing
+         * on where it was (so it neither falls nor is dragged through the
+         * animation), and once it has settled the rig is told the whole move —
+         * a small one is ridden, a big one is climbed or rappelled on the rope.
+         */
+        const homeNow = placed ? homeFloor(floors) : null;
+        if (homeNow && lastHome) {
+          const moved = Math.abs(homeNow.y - lastHome.y) > 0.5;
+          if (moved && frozenY === null) { frozenY = lastHome.y; settled = 0; }
+          else if (frozenY !== null) {
+            settled = moved ? 0 : settled + 1;
+            if (settled >= 2) { brain.ride(frozenY, homeNow.y, homeNow); frozenY = null; }
+          }
         }
+        lastHome = homeNow;
+        if (frozenY !== null) floors = floors.map((f) => (f.home ? { ...f, y: frozenY as number } : f));
         const sig = floorSig(floors);
         if (sig !== lastSig) { if (lastSig) floorsHotUntil = now + 600; lastSig = sig; }
         if (!placed) {
@@ -552,7 +575,7 @@ export default function Arta({
       document.removeEventListener("visibilitychange", onVis);
       reduce?.removeEventListener?.("change", onReduce);
     };
-  }, [height, start, rangeLo, rangeHi, fill, figure]);
+  }, [height, start, rangeLo, rangeHi, fill, figure, ropeZ]);
 
   return (
     <div ref={host} className={className} style={fill ? undefined : { height }} data-arta>
