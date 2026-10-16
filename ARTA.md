@@ -88,12 +88,27 @@ turns, 595 frames): **peak 11.18 px/frame, flag never raised**.
 
 ### Turning is continuous, not a flip
 
-Facing is implemented by negating every joint angle, so treating `face` as a
-boolean moves a foot **~43 px in a single frame** — by a wide margin the largest
-gradient in the system, and one no blend can soften because it is discrete.
-`face` is therefore a continuous value in `[-1, 1]`. Easing it through zero gives
-a real turn: the figure narrows to its own profile, passes edge-on, and opens out
-the other way.
+Treating `face` as a boolean moves a foot **~43 px in a single frame** — by a
+wide margin the largest gradient in the system, and one no blend can soften
+because it is discrete. `face` is therefore a continuous value in `[-1, 1]`.
+Easing it through zero gives a real turn: the figure narrows to its own profile,
+passes edge-on, and opens out the other way.
+
+`face` is the **cosine of the turn**: it scales every horizontal offset from the
+hip and leaves heights alone, which is how a flat figure looks while it rotates
+about its vertical axis. At ±1 that is identical to negating every joint angle,
+so settled poses and the film are unchanged. It used to multiply the angles,
+and mid-turn that straightened every joint: knees locked, a lifted foot dropped
+to full leg length, a planted one pushed through the floor, and the figure
+collapsed into one straight stick for a frame.
+
+**Turn about the foot you stand on.** A walk that sets off the way Arta's back
+is facing used to flip `face` at the walk's k = 60 — two frames, both feet
+swept across the floor (17–22 px on production). It now pivots first: the
+grounded foot furthest along the new direction keeps the weight, the hip comes
+over it while the other foot lifts in beneath, and only then does the figure
+turn. With both feet under the hip the turn moves neither, and the walk carries
+on from mid-stance on that foot.
 
 ---
 
@@ -131,6 +146,9 @@ timing will feel like it belongs to a different character.
 | Aim held | 2.6 s (`conviction`) | Long enough to follow the arrow, short enough not to nag |
 | Arrow flight | 0.5 s, fade at 1.1 s | |
 | Turn | 0.30 s | A squash for weight; `face` eases through zero on its own |
+| Pivot before a walk that reverses | 0.34 s | Weight onto one foot and the other in (0.17 s), then the turn (0.17 s) |
+| Rope arrival | legs reach over the last third of the trip; arms come down over 0.2 s | Letting go keeps the body's vertical speed |
+| Landing absorb | down 0.08–0.14 s, hold 0.05 s, up 0.22–0.42 s | Hip sinks 6 + 20·hard units (a rope drop counts as hard ≥ 0.45); feet pinned, ends exactly in the stand pose |
 | Idle → wander | 7 s (`restlessness`) | |
 | Idle → sit down | 75 s (`patience`) | |
 | Reaction delay after a UI event | 260–480 ms | Reacting on the same frame reads as *part of the UI*; a beat later reads as **noticing** |
@@ -459,8 +477,8 @@ travel are one contract; two copies of a number is two chances to break it.
 **Measured:** planted-foot drift 40.9 px → 0.00 px in the pose, and ≤ 1.8 px
 live at 30, 60 and 144 Hz.
 
-**The ceiling holds through a TURN, at both figure sizes.** A turn negates every
-joint angle and is by a wide margin the largest gradient the rig can produce,
+**The ceiling holds through a TURN, at both figure sizes.** A turn mirrors every
+horizontal offset and is by a wide margin the largest gradient the rig can produce,
 and the browser audit drives the pointer in ways that may never provoke one — so
 it is checked directly instead: 24 turns at each of 128 px and 87 px, at 30, 60
 and 144 Hz, peak 9.55 px/frame against the tightest budget of 12. Note the
